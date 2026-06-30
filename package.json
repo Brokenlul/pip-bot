@@ -1,0 +1,31 @@
+{
+  "name": "paul-bot",
+  "version": "0.1.0",
+  "private": true,
+  "description": "AI research analyst for crypto / finance / trading communities — grounded answers + per-guild memory.",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "start": "node dist/index.js",
+    "dev": "tsx watch src/index.ts",
+    "register-commands": "tsx src/scripts/register-commands.ts",
+    "migrate": "tsx src/scripts/migrate.ts"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.40.0",
+    "@supabase/supabase-js": "^2.45.0",
+    "discord.js": "^14.16.0",
+    "dotenv": "^16.4.5",
+    "p-retry": "^6.2.0",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/node": "^22.5.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0"
+  }
+}
