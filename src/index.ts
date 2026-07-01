@@ -1,6 +1,6 @@
 import { DiscordAdapter } from './adapters/discord.js';
 import { answer } from './core/agent.js';
-import { getConfig, memoryEnabled, embeddingsEnabled } from './config.js';
+import { getConfig, memoryEnabled, embeddingsEnabled, companionApiEnabled } from './config.js';
 import { renderReplyText } from './core/formatter.js';
 
 async function main(): Promise<void> {
@@ -8,7 +8,8 @@ async function main(): Promise<void> {
   getConfig();
   console.log(
     `[paul] memory=${memoryEnabled() ? 'on' : 'off'} cache=${embeddingsEnabled() ? 'on' : 'off'} ` +
-      `(memory needs Supabase, cache also needs Voyage)`,
+      `companion=${companionApiEnabled() ? 'on' : 'off'} ` +
+      `(memory needs Supabase, cache also needs Voyage, companion needs PAUL_API_KEY)`,
   );
 
   const adapter = new DiscordAdapter();

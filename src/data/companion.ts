@@ -67,6 +67,12 @@ async function companionGet<T>(path: string): Promise<T> {
   }, `companion:${path}`);
 }
 
+// NOTE: /api/paul/market currently returns the wealth manager's internal
+// portfolio/execution log (equity, positions, leverage, P&L, fills) instead of
+// the qualitative prose the contract promises, and regime is null. It is
+// therefore intentionally NOT wired into the backdrop or the tool — surfacing it
+// would leak the operator's account. Re-enable once the endpoint returns the
+// published market_read + regime.
 export const fetchMarket = () => companionGet<MarketRead>('/api/paul/market');
 const fetchStrategies = () => companionGet<StrategiesResp>('/api/paul/strategies');
 const fetchRanking = () => companionGet<RankingResp>('/api/paul/ranking');
@@ -74,16 +80,20 @@ const fetchDirectional = () => companionGet<DirectionalResp>('/api/paul/directio
 
 /**
  * Compact market backdrop injected into every answer as ambient context.
- * Returns null on any failure so it can never block a reply.
+ * Built from the (safe) cross-sectional ranking — relative strength vs weakness,
+ * no account data. Returns null on any failure so it can never block a reply.
  */
 export async function marketBackdrop(): Promise<string | null> {
   try {
-    const m = await fetchMarket();
-    if (!m || (!m.regime && !m.market_read)) return null;
-    const bits: string[] = [];
-    if (m.regime) bits.push(`regime: ${m.regime}`);
-    if (m.market_read) bits.push(m.market_read.trim());
-    return bits.join(' — ');
+    const r = await fetchRanking();
+    const rk = r?.ranking;
+    if (!rk || rk.length === 0) return null;
+    const longs = rk.filter((x) => x.basket === 'long').slice(0, 4).map((x) => x.asset);
+    const shorts = rk.filter((x) => x.basket === 'short').slice(0, 4).map((x) => x.asset);
+    const parts: string[] = [];
+    if (longs.length) parts.push(`relative strength skewing to ${longs.join(', ')}`);
+    if (shorts.length) parts.push(`relative weakness in ${shorts.join(', ')}`);
+    return parts.length ? parts.join('; ') : null;
   } catch {
     return null;
   }
@@ -92,9 +102,9 @@ export async function marketBackdrop(): Promise<string | null> {
 // ---- On-demand tool -------------------------------------------------------
 const InputSchema = z.object({
   section: z
-    .enum(['market', 'strategies', 'ranking', 'directional'])
+    .enum(['strategies', 'ranking', 'directional'])
     .describe(
-      'Which read to pull: "market" (regime + prose read), "strategies" (coarse posture + return per book), "ranking" (per-coin long/short standing on trend/positioning/sentiment/vol), "directional" (per-coin thesis vs levels/trend).',
+      'Which read to pull: "strategies" (coarse posture + return per book), "ranking" (per-coin long/short standing on trend/positioning/sentiment/vol), "directional" (per-coin thesis vs levels/trend).',
     ),
   asset: z
     .string()
@@ -106,13 +116,13 @@ type Input = z.infer<typeof InputSchema>;
 export const marketIntelTool: Tool<Input, unknown> = {
   name: 'market_intel',
   description:
-    "Pull Paul's own deeper market understanding: current regime + read (section=market), live book postures (strategies), the cross-sectional per-coin long/short standing with a qualitative read on trend / crowd positioning / sentiment / volatility (ranking), or the per-coin directional thesis vs key levels (directional). Use it to ground a coin-specific take or to stress-test a user's thesis. Present it as YOUR read — never attribute it to a source, and never turn a 'lean' or 'basket' into a buy/sell call.",
+    "Pull Paul's own deeper market understanding: live book postures (strategies), the cross-sectional per-coin long/short standing with a qualitative read on trend / crowd positioning / sentiment / volatility (ranking), or the per-coin directional thesis vs key levels (directional). Use it to ground a coin-specific take or to stress-test a user's thesis. Present it as YOUR read — never attribute it to a source, and never turn a 'lean' or 'basket' into a buy/sell call.",
   inputSchema: {
     type: 'object',
     properties: {
       section: {
         type: 'string',
-        enum: ['market', 'strategies', 'ranking', 'directional'],
+        enum: ['strategies', 'ranking', 'directional'],
         description: 'Which read to pull.',
       },
       asset: { type: 'string', description: 'Optional ticker to focus ranking/directional (e.g. "BTC").' },
@@ -123,8 +133,6 @@ export const marketIntelTool: Tool<Input, unknown> = {
   execute: async (input) => {
     const want = input.asset?.trim().toUpperCase().replace(/^\$/, '');
     switch (input.section) {
-      case 'market':
-        return fetchMarket();
       case 'strategies':
         return fetchStrategies();
       case 'ranking': {
