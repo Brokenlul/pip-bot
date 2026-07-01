@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { Tool, zValidator } from './registry.js';
-import { makeCache, withRetry } from '../core/util.js';
+import { makeCache, withRetry, fetchWithTimeout } from '../core/util.js';
 import { getConfig } from '../config.js';
 
 const InputSchema = z.object({
@@ -46,7 +46,7 @@ async function resolveCoinId(query: string): Promise<string | null> {
   return idCache.wrap(q, async () => {
     if (SYMBOL_OVERRIDES[q]) return SYMBOL_OVERRIDES[q]!;
     const url = `https://api.coingecko.com/api/v3/search?query=${encodeURIComponent(q)}`;
-    const res = await fetch(url, { headers: baseHeaders() });
+    const res = await fetchWithTimeout(url, { headers: baseHeaders() });
     if (!res.ok) throw new Error(`coingecko search ${res.status}`);
     const data = (await res.json()) as { coins?: Array<{ id: string; symbol: string; name: string }> };
     const exact = data.coins?.find(
@@ -59,7 +59,7 @@ async function resolveCoinId(query: string): Promise<string | null> {
 async function fetchPrice(coinId: string): Promise<Output> {
   return cache.wrap(coinId, async () => {
     const url = `https://api.coingecko.com/api/v3/coins/${coinId}?localization=false&tickers=false&community_data=false&developer_data=false`;
-    const res = await fetch(url, { headers: baseHeaders() });
+    const res = await fetchWithTimeout(url, { headers: baseHeaders() });
     if (!res.ok) throw new Error(`coingecko price ${res.status}`);
     const j = (await res.json()) as {
       symbol: string;

@@ -42,6 +42,19 @@ export function makeCache<T>(ttlMs: number) {
   };
 }
 
+/**
+ * fetch with a hard timeout. Node's global fetch has NO default timeout, so a
+ * stalled socket hangs forever — this bounds every external call. On timeout it
+ * throws (a TimeoutError), which withRetry will catch and retry.
+ */
+export async function fetchWithTimeout(
+  url: string,
+  init: RequestInit = {},
+  timeoutMs = 8000,
+): Promise<Response> {
+  return fetch(url, { ...init, signal: AbortSignal.timeout(timeoutMs) });
+}
+
 export function nowIso(): string {
   return new Date().toISOString();
 }

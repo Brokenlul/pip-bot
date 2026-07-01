@@ -1,5 +1,6 @@
 import { getDb } from './db.js';
 import { embed } from './embeddings.js';
+import { recordTopics } from './pulse.js';
 import { getConfig, memoryEnabled, embeddingsEnabled } from '../config.js';
 
 /**
@@ -122,6 +123,10 @@ export async function persistQA(opts: {
       })
       .throwOnError();
   }
+
+  // 3. Anonymized global pulse — topic counts only, never raw text or guild id.
+  //    Non-blocking and non-throwing so it can never break a persisted answer.
+  void recordTopics(opts.question);
 }
 
 export async function recentQuestions(

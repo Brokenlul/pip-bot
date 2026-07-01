@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { Tool, zValidator } from './registry.js';
-import { makeCache, withRetry } from '../core/util.js';
+import { makeCache, withRetry, fetchWithTimeout } from '../core/util.js';
 
 /**
  * Hyperliquid public API — funding + open interest for perps.
@@ -39,7 +39,7 @@ interface AssetCtx {
 }
 
 async function fetchMeta(): Promise<{ universe: Array<{ name: string }> }> {
-  const res = await fetch('https://api.hyperliquid.xyz/info', {
+  const res = await fetchWithTimeout('https://api.hyperliquid.xyz/info', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ type: 'meta' }),
@@ -50,7 +50,7 @@ async function fetchMeta(): Promise<{ universe: Array<{ name: string }> }> {
 
 async function fetchAssetCtxs(): Promise<Array<[unknown, AssetCtx]>> {
   // metaAndAssetCtxs returns [meta, ctxArray]; we want ctxArray
-  const res = await fetch('https://api.hyperliquid.xyz/info', {
+  const res = await fetchWithTimeout('https://api.hyperliquid.xyz/info', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ type: 'metaAndAssetCtxs' }),

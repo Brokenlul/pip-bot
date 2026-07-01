@@ -13,6 +13,7 @@ const Schema = z.object({
   SUPABASE_SERVICE_ROLE_KEY: z.string().optional(),  // legacy JWT: eyJ...
 
   COINGECKO_API_KEY: z.string().optional(),
+  FRED_API_KEY: z.string().optional(),
   VOYAGE_API_KEY: z.string().optional(),
 
   ANSWER_MODEL: z.string().default('claude-sonnet-4-6'),
@@ -50,4 +51,9 @@ export function memoryEnabled(cfg: Config = getConfig()): boolean {
 /** Embeddings = semantic cache + (future) fuzzy recall. Needs Voyage. */
 export function embeddingsEnabled(cfg: Config = getConfig()): boolean {
   return Boolean(cfg.VOYAGE_API_KEY);
+}
+
+/** FRED macro tool needs a (free) API key. Registered only when set. */
+export function fredEnabled(cfg: Config = getConfig()): boolean {
+  return Boolean(cfg.FRED_API_KEY);
 }
