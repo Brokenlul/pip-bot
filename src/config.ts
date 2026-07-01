@@ -16,6 +16,11 @@ const Schema = z.object({
   FRED_API_KEY: z.string().optional(),
   VOYAGE_API_KEY: z.string().optional(),
 
+  // AI Wealth Manager companion API (read-only market understanding).
+  // Tools + ambient backdrop load only when PAUL_API_KEY is set.
+  PAUL_API_BASE_URL: z.string().url().default('https://ai-wealth-manager-nu.vercel.app'),
+  PAUL_API_KEY: z.string().optional(),
+
   ANSWER_MODEL: z.string().default('claude-sonnet-4-6'),
   EMBEDDING_MODEL: z.string().default('voyage-3-lite'),
 
@@ -56,4 +61,9 @@ export function embeddingsEnabled(cfg: Config = getConfig()): boolean {
 /** FRED macro tool needs a (free) API key. Registered only when set. */
 export function fredEnabled(cfg: Config = getConfig()): boolean {
   return Boolean(cfg.FRED_API_KEY);
+}
+
+/** AI Wealth Manager companion API. Tools + backdrop load only when its key is set. */
+export function companionApiEnabled(cfg: Config = getConfig()): boolean {
+  return Boolean(cfg.PAUL_API_KEY);
 }

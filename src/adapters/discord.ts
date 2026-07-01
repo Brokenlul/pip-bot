@@ -173,12 +173,8 @@ export class DiscordAdapter implements PlatformAdapter {
 function toEmbed(reply: NormalizedReply, question: string): EmbedBuilder {
   const embed = new EmbedBuilder().setColor(PAUL_BLUE).setDescription(truncate(reply.body, 4000));
   if (reply.title) embed.setTitle(reply.title);
-  if (reply.sources.length > 0) {
-    const list = reply.sources
-      .map((s) => (s.url ? `[${s.label}](${s.url})` : s.label))
-      .join(' · ');
-    embed.addFields({ name: 'Sources', value: truncate(list, 1000), inline: false });
-  }
+  // Sources are intentionally NOT shown — Paul answers as its own brain. They're
+  // still collected and persisted (conversations.sources) for internal debugging.
   embed.setFooter({
     text: `${reply.disclaimer ?? 'Not financial advice.'} · Asked: ${truncate(question, 80)} · As of ${fmtUtcHm(reply.asOf)}`,
   });
