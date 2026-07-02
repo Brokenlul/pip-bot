@@ -41,10 +41,12 @@ const ENDPOINT: Record<string, string> = {
 };
 
 // Key line items to surface per statement (keeps payloads tight + readable).
+// Field names per FMP /stable/ (differ from legacy v3 — no *Ratio fields,
+// epsDiluted not epsdiluted, commonDividendsPaid not dividendsPaid).
 const FIELDS: Record<string, string[]> = {
   income: [
-    'revenue', 'costOfRevenue', 'grossProfit', 'grossProfitRatio', 'operatingExpenses',
-    'operatingIncome', 'operatingIncomeRatio', 'ebitda', 'netIncome', 'netIncomeRatio', 'eps', 'epsdiluted',
+    'revenue', 'costOfRevenue', 'grossProfit', 'operatingExpenses',
+    'operatingIncome', 'ebitda', 'netIncome', 'eps', 'epsDiluted',
   ],
   balance: [
     'cashAndCashEquivalents', 'shortTermInvestments', 'totalCurrentAssets', 'totalAssets',
@@ -52,7 +54,7 @@ const FIELDS: Record<string, string[]> = {
   ],
   cashflow: [
     'netIncome', 'operatingCashFlow', 'capitalExpenditure', 'freeCashFlow',
-    'dividendsPaid', 'commonStockRepurchased', 'netChangeInCash',
+    'commonDividendsPaid', 'commonStockRepurchased', 'netChangeInCash',
   ],
 };
 
@@ -82,7 +84,7 @@ export const financialStatementsTool: Tool<StatementInput, StatementOut> = {
     return withRetry(async () => {
       const hit = cache.get(cacheKey);
       if (hit) return hit;
-      const url = `https://financialmodelingprep.com/api/v3/${ENDPOINT[statement]}/${symbol}?period=${period}&limit=4&apikey=${key}`;
+      const url = `https://financialmodelingprep.com/stable/${ENDPOINT[statement]}?symbol=${symbol}&period=${period}&limit=4&apikey=${key}`;
       const res = await fetchWithTimeout(url, {}, 12_000);
       if (res.status === 401 || res.status === 403) throw new Error(`fmp auth ${res.status} (check key/tier)`);
       if (!res.ok) throw new Error(`fmp ${statement} ${res.status}`);
