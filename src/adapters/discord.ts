@@ -235,8 +235,11 @@ async function collectImages(message: Message): Promise<NormalizedImage[]> {
   for (const att of message.attachments.values()) {
     if (out.length >= MAX_IMAGES) break;
     const ct = att.contentType?.split(';')[0]?.trim().toLowerCase();
-    const mediaType = ct ? SUPPORTED_IMAGE_TYPES[ct] : undefined;
-    if (!mediaType) continue;
+    const declared = ct ? SUPPORTED_IMAGE_TYPES[ct] : undefined;
+    // Only bother with things Discord labels as an image; the true type is
+    // sniffed from the bytes below (Discord's contentType is often wrong —
+    // e.g. it labels TradingView PNG screenshots as image/webp).
+    if (!declared) continue;
     if (att.size > MAX_IMAGE_BYTES) {
       console.warn(`[discord] skipping oversized image (${att.size} bytes): ${att.name}`);
       continue;
@@ -246,12 +249,27 @@ async function collectImages(message: Message): Promise<NormalizedImage[]> {
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const buf = Buffer.from(await res.arrayBuffer());
       if (buf.byteLength > MAX_IMAGE_BYTES) continue;
+      // Trust the magic bytes over Discord's label — Anthropic rejects a
+      // media_type that doesn't match the actual image bytes.
+      const mediaType = sniffImageType(buf) ?? declared;
       out.push({ mediaType, dataBase64: buf.toString('base64') });
     } catch (e) {
       console.warn(`[discord] failed to fetch image ${att.name}: ${(e as Error).message}`);
     }
   }
   return out;
+}
+
+/** Detect the true image type from file magic bytes (not the declared MIME). */
+function sniffImageType(buf: Buffer): NormalizedImage['mediaType'] | undefined {
+  if (buf.length >= 8 && buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4e && buf[3] === 0x47)
+    return 'image/png';
+  if (buf.length >= 3 && buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff) return 'image/jpeg';
+  if (buf.length >= 4 && buf[0] === 0x47 && buf[1] === 0x49 && buf[2] === 0x46 && buf[3] === 0x38)
+    return 'image/gif';
+  if (buf.length >= 12 && buf.toString('ascii', 0, 4) === 'RIFF' && buf.toString('ascii', 8, 12) === 'WEBP')
+    return 'image/webp';
+  return undefined;
 }
 
 function toEmbed(reply: NormalizedReply, question: string): EmbedBuilder {
