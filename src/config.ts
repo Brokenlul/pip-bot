@@ -21,6 +21,9 @@ const Schema = z.object({
   // Finnhub (finnhub.io) — free tier. Powers the equity tools: quote,
   // fundamentals/metrics, earnings surprises + calendar + recommendations.
   FINNHUB_API_KEY: z.string().optional(),
+  // Financial Modeling Prep (financialmodelingprep.com) — free tier.
+  // Full line-item income / balance / cash-flow statements.
+  FMP_API_KEY: z.string().optional(),
 
   // AI Wealth Manager companion API (read-only market understanding).
   // Tools + ambient backdrop load only when PAUL_API_KEY is set.
@@ -82,4 +85,9 @@ export function solanaTrackerEnabled(cfg: Config = getConfig()): boolean {
 /** Finnhub equity tools (snapshot / fundamentals / earnings). Needs a (free) key. */
 export function finnhubEnabled(cfg: Config = getConfig()): boolean {
   return Boolean(cfg.FINNHUB_API_KEY);
+}
+
+/** FMP full financial statements tool. Needs a (free) key. */
+export function fmpEnabled(cfg: Config = getConfig()): boolean {
+  return Boolean(cfg.FMP_API_KEY);
 }

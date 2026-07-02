@@ -341,3 +341,71 @@ export const equityEarningsTool: Tool<SymbolInput, EarningsOut> = {
   },
   citation: (_, out) => ({ label: `Finnhub earnings (${out.symbol})`, url: `https://finnhub.io/quote/${out.symbol}` }),
 };
+
+// ================= financial_news =========================================
+
+const NewsSchema = z.object({
+  symbol: z.string().optional().describe('Ticker for company-specific news, e.g. "AAPL". Omit for market-wide news.'),
+  category: z
+    .enum(['general', 'crypto', 'forex', 'merger'])
+    .optional()
+    .describe('Market news category when no symbol is given. Default "general".'),
+});
+type NewsInput = z.infer<typeof NewsSchema>;
+
+interface NewsItem {
+  headline?: string;
+  summary?: string;
+  source?: string;
+  url?: string;
+  datetime?: number; // unix seconds
+}
+interface NewsOut {
+  scope: string;
+  items: { headline: string; source: string | null; when: string | null; url: string | null; summary: string | null }[];
+}
+
+export const financialNewsTool: Tool<NewsInput, NewsOut> = {
+  name: 'financial_news',
+  description:
+    'Recent news headlines — either for a specific company (pass symbol, e.g. "NVDA") or market-wide by category (general / crypto / forex / merger). Use to ground "why is <ticker> moving", "any news on X", or to add a current-events backdrop. Returns recent headlines with source, time, and link.',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      symbol: { type: 'string', description: 'Ticker for company news (e.g. "AAPL"). Omit for market news.' },
+      category: { type: 'string', enum: ['general', 'crypto', 'forex', 'merger'], description: 'Market news category if no symbol.' },
+    },
+    required: [],
+  },
+  validate: zValidator(NewsSchema),
+  execute: async (input) => {
+    return withRetry(async () => {
+      let raw: NewsItem[];
+      let scope: string;
+      if (input.symbol) {
+        const symbol = input.symbol.trim().toUpperCase().replace(/^\$/, '');
+        const to = new Date();
+        const from = new Date(to.getTime() - 14 * 86_400_000);
+        raw = await finnhubGet<NewsItem[]>('/company-news', {
+          symbol,
+          from: from.toISOString().slice(0, 10),
+          to: to.toISOString().slice(0, 10),
+        });
+        scope = symbol;
+      } else {
+        const category = input.category ?? 'general';
+        raw = await finnhubGet<NewsItem[]>('/news', { category });
+        scope = `market:${category}`;
+      }
+      const items = (raw ?? []).slice(0, 6).map((x) => ({
+        headline: x.headline ?? '',
+        source: x.source ?? null,
+        when: x.datetime ? new Date(x.datetime * 1000).toISOString() : null,
+        url: x.url ?? null,
+        summary: x.summary ? (x.summary.length > 240 ? `${x.summary.slice(0, 239)}…` : x.summary) : null,
+      }));
+      return { scope, items };
+    }, `finnhub:news:${input.symbol ?? input.category ?? 'general'}`);
+  },
+  citation: (_, out) => ({ label: `Finnhub news (${out.scope})`, url: 'https://finnhub.io' }),
+};

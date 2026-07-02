@@ -1,5 +1,5 @@
 import Anthropic from '@anthropic-ai/sdk';
-import { getConfig, fredEnabled, companionApiEnabled, finnhubEnabled } from '../config.js';
+import { getConfig, fredEnabled, companionApiEnabled, finnhubEnabled, fmpEnabled } from '../config.js';
 import { NormalizedMessage, NormalizedReply, SourceCitation } from '../adapters/platform.js';
 import { ToolRegistry, ToolContext } from '../data/registry.js';
 import { cryptoPriceTool } from '../data/coingecko.js';
@@ -7,7 +7,10 @@ import { fundingRateTool } from '../data/hyperliquid.js';
 import { fedCalendarTool } from '../data/fed-calendar.js';
 import { dexScreenerTool } from '../data/dexscreener.js';
 import { tokenScanTool } from '../data/token-scan.js';
-import { equitySnapshotTool, equityFundamentalsTool, equityEarningsTool } from '../data/finnhub.js';
+import { equitySnapshotTool, equityFundamentalsTool, equityEarningsTool, financialNewsTool } from '../data/finnhub.js';
+import { cryptoMarketOverviewTool, defiProtocolTool } from '../data/defillama.js';
+import { secFilingsTool } from '../data/sec-edgar.js';
+import { financialStatementsTool } from '../data/fmp.js';
 import { fredTool } from '../data/fred.js';
 import { cpiCalendarTool } from '../data/cpi-calendar.js';
 import { polymarketTool } from '../data/polymarket.js';
@@ -89,6 +92,8 @@ Tools you have (prefer them over training data):
 - crypto_price (CoinGecko) for listed spot prices; dex_token_lookup (DexScreener) for a newer/smaller token by symbol or name CoinGecko doesn't know.
 - equity_snapshot / equity_fundamentals / equity_earnings (Finnhub, may be unavailable if not configured) for LISTED STOCKS: snapshot = price/market cap/52w/P-E/P-S; fundamentals = revenue & EPS growth, margins, ROE, debt, valuation multiples; earnings = next earnings date, consensus EPS/revenue estimate, recent beat/miss history, and analyst recommendation split. Use these for any company/ticker question and to predict an upcoming print.
 - token_scan for a full degen/memecoin read when a user pastes a CONTRACT ADDRESS or mint (especially Solana pump.fun) or asks "is this safe / bundled / who holds this". It returns market data + on-chain security (holders, top-holder concentration, insider %, LP locked, mint/freeze authority, risk flags) AND, when available, a smart_money block (the token's most profitable traders by realized PnL — how many still hold vs. exited, cohort realized PnL). Prefer it over dex_token_lookup whenever the input is an address.
+- crypto_market_overview (DefiLlama + Fear & Greed) for the top-down backdrop: total DeFi TVL, biggest chains, total stablecoin supply (dry powder), 24h DEX volume + fees, and the Fear & Greed index. defi_protocol for a specific protocol's TVL / 1d-7d change / fees / revenue — the protocol's actual business, not just token price.
+- sec_filings for a US company's recent official filings (10-K/10-Q reports, 8-K material events, Form 4 insider trades) with dates + links — ground-truth events. financial_news (Finnhub, may be unavailable) for recent company or market/crypto news headlines. equity_financial_statements (FMP, may be unavailable) for full line-item income/balance/cash-flow statements over the last few periods.
 - crypto_perp_funding_and_oi (Hyperliquid) for funding / open interest / premium / mark price. Covers standard perps (BTC, ETH, SOL…) AND builder-deployed (HIP-3) markets — tokenized equities and thematic baskets like BOT, TSLA, NVDA, ROBOT, OPENAI. If a user asks "what is <name> on Hyperliquid" for something that isn't a normal coin, try this tool with the ticker — it auto-resolves the builder venue; if it returns data, the thing is a live Hyperliquid market and you can describe its mark/funding/OI.
 - macro_indicator (FRED) for the latest CPI/PCE/unemployment/GDP/yields numbers (may be unavailable if not configured).
 - next_fomc_meeting and next_cpi_release for macro event *dates*; macro_indicator for the actual figures.
@@ -117,13 +122,21 @@ function buildRegistry(): ToolRegistry {
     .register(fedCalendarTool)
     .register(dexScreenerTool)
     .register(tokenScanTool)
+    .register(cryptoMarketOverviewTool)
+    .register(defiProtocolTool)
+    .register(secFilingsTool)
     .register(cpiCalendarTool)
     .register(polymarketTool)
     .register(kalshiTool);
   if (fredEnabled()) reg.register(fredTool);
   if (finnhubEnabled()) {
-    reg.register(equitySnapshotTool).register(equityFundamentalsTool).register(equityEarningsTool);
+    reg
+      .register(equitySnapshotTool)
+      .register(equityFundamentalsTool)
+      .register(equityEarningsTool)
+      .register(financialNewsTool);
   }
+  if (fmpEnabled()) reg.register(financialStatementsTool);
   if (companionApiEnabled()) reg.register(marketIntelTool);
   if (isMemoryOn()) {
     reg.register(recentQuestionsTool);
