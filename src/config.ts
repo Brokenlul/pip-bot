@@ -18,6 +18,9 @@ const Schema = z.object({
   // Solana Tracker (data.solanatracker.io) — free tier, no card. Enriches
   // token_scan with per-token top-traders-by-PnL (the smart-money proxy).
   SOLANA_TRACKER_API_KEY: z.string().optional(),
+  // Finnhub (finnhub.io) — free tier. Powers the equity tools: quote,
+  // fundamentals/metrics, earnings surprises + calendar + recommendations.
+  FINNHUB_API_KEY: z.string().optional(),
 
   // AI Wealth Manager companion API (read-only market understanding).
   // Tools + ambient backdrop load only when PAUL_API_KEY is set.
@@ -74,4 +77,9 @@ export function companionApiEnabled(cfg: Config = getConfig()): boolean {
 /** Solana Tracker smart-money enrichment for token_scan. Needs a (free) key. */
 export function solanaTrackerEnabled(cfg: Config = getConfig()): boolean {
   return Boolean(cfg.SOLANA_TRACKER_API_KEY);
+}
+
+/** Finnhub equity tools (snapshot / fundamentals / earnings). Needs a (free) key. */
+export function finnhubEnabled(cfg: Config = getConfig()): boolean {
+  return Boolean(cfg.FINNHUB_API_KEY);
 }

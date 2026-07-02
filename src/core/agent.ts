@@ -1,5 +1,5 @@
 import Anthropic from '@anthropic-ai/sdk';
-import { getConfig, fredEnabled, companionApiEnabled } from '../config.js';
+import { getConfig, fredEnabled, companionApiEnabled, finnhubEnabled } from '../config.js';
 import { NormalizedMessage, NormalizedReply, SourceCitation } from '../adapters/platform.js';
 import { ToolRegistry, ToolContext } from '../data/registry.js';
 import { cryptoPriceTool } from '../data/coingecko.js';
@@ -7,6 +7,7 @@ import { fundingRateTool } from '../data/hyperliquid.js';
 import { fedCalendarTool } from '../data/fed-calendar.js';
 import { dexScreenerTool } from '../data/dexscreener.js';
 import { tokenScanTool } from '../data/token-scan.js';
+import { equitySnapshotTool, equityFundamentalsTool, equityEarningsTool } from '../data/finnhub.js';
 import { fredTool } from '../data/fred.js';
 import { cpiCalendarTool } from '../data/cpi-calendar.js';
 import { polymarketTool } from '../data/polymarket.js';
@@ -78,8 +79,15 @@ Explaining events / news ("what does the MSTR bitcoin monetization program mean?
 - Break it down like an analyst: what actually changed, which factors and specific assets it touches, the credible bull case and bear case, and what to watch next. Name the assets in the blast radius.
 - Characterizing something as net-constructive or net-negative for an asset, with your reasoning, is analysis and is fine. Telling someone to trade on it is not — never cross that line.
 
+Equities, fundamentals & earnings (you are an all-rounder — stocks are in scope, not just crypto):
+- You cover listed equities with the same rigor as crypto: price and technicals (via equity_snapshot, and for names tokenized on Hyperliquid via HIP-3 like TSLA/NVDA/BOT, also crypto_perp_funding_and_oi for their perp funding/OI), plus fundamentals — financials, growth, margins, profitability, balance-sheet health (equity_fundamentals) — and earnings (equity_earnings).
+- Always connect equities back to the whole board. A move in NVDA/semis, the Mag7, or rates-sensitive names shifts risk appetite and flows into crypto; MSTR and COIN are near-direct BTC/crypto proxies; a hot or cold tech-earnings season drives the beta that alts trade on. When a user asks about a stock, note the read-across to crypto when it's real — that's your edge as an all-rounder.
+- Predicting an upcoming earnings print: pull equity_earnings (consensus EPS/revenue estimate, the recent beat/miss pattern, the next date) and equity_fundamentals (growth and margin trajectory), then reason to an EXPECTATION — likely direction vs. consensus, a rough range, and the swing factors (guidance, a margin inflection, demand signal). Frame it as analysis with explicit uncertainty and confidence, never a certainty or a trade instruction. Say what would confirm or break the call. You do NOT have the earnings-call transcript or official guidance text yet — don't invent management quotes; if that qualitative layer would change the read, say so.
+- Same discipline as everywhere: describe state, scenarios, and what would change your mind. Analysis of whether results are constructive or negative for a name is fine; telling someone to buy or sell it is not.
+
 Tools you have (prefer them over training data):
 - crypto_price (CoinGecko) for listed spot prices; dex_token_lookup (DexScreener) for a newer/smaller token by symbol or name CoinGecko doesn't know.
+- equity_snapshot / equity_fundamentals / equity_earnings (Finnhub, may be unavailable if not configured) for LISTED STOCKS: snapshot = price/market cap/52w/P-E/P-S; fundamentals = revenue & EPS growth, margins, ROE, debt, valuation multiples; earnings = next earnings date, consensus EPS/revenue estimate, recent beat/miss history, and analyst recommendation split. Use these for any company/ticker question and to predict an upcoming print.
 - token_scan for a full degen/memecoin read when a user pastes a CONTRACT ADDRESS or mint (especially Solana pump.fun) or asks "is this safe / bundled / who holds this". It returns market data + on-chain security (holders, top-holder concentration, insider %, LP locked, mint/freeze authority, risk flags) AND, when available, a smart_money block (the token's most profitable traders by realized PnL — how many still hold vs. exited, cohort realized PnL). Prefer it over dex_token_lookup whenever the input is an address.
 - crypto_perp_funding_and_oi (Hyperliquid) for funding / open interest / premium / mark price. Covers standard perps (BTC, ETH, SOL…) AND builder-deployed (HIP-3) markets — tokenized equities and thematic baskets like BOT, TSLA, NVDA, ROBOT, OPENAI. If a user asks "what is <name> on Hyperliquid" for something that isn't a normal coin, try this tool with the ticker — it auto-resolves the builder venue; if it returns data, the thing is a live Hyperliquid market and you can describe its mark/funding/OI.
 - macro_indicator (FRED) for the latest CPI/PCE/unemployment/GDP/yields numbers (may be unavailable if not configured).
@@ -113,6 +121,9 @@ function buildRegistry(): ToolRegistry {
     .register(polymarketTool)
     .register(kalshiTool);
   if (fredEnabled()) reg.register(fredTool);
+  if (finnhubEnabled()) {
+    reg.register(equitySnapshotTool).register(equityFundamentalsTool).register(equityEarningsTool);
+  }
   if (companionApiEnabled()) reg.register(marketIntelTool);
   if (isMemoryOn()) {
     reg.register(recentQuestionsTool);
