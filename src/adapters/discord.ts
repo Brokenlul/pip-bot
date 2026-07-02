@@ -245,7 +245,9 @@ async function collectImages(message: Message): Promise<NormalizedImage[]> {
       continue;
     }
     try {
-      const res = await fetch(att.url);
+      // Hard timeout — a stalled CDN fetch here would hang the whole reply
+      // (no typing, no answer) since this runs before the agent loop.
+      const res = await fetch(att.url, { signal: AbortSignal.timeout(10_000) });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const buf = Buffer.from(await res.arrayBuffer());
       if (buf.byteLength > MAX_IMAGE_BYTES) continue;
