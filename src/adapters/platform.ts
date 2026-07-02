@@ -4,6 +4,12 @@
  * Adding Telegram later means a new adapter, not a rewrite of core.
  */
 
+/** An image the user attached — chart screenshots are the primary case. */
+export interface NormalizedImage {
+  mediaType: 'image/png' | 'image/jpeg' | 'image/gif' | 'image/webp';
+  dataBase64: string;
+}
+
 export interface NormalizedMessage {
   platform: 'discord' | 'telegram';
   guildId: string;     // for DMs, set to `dm:<userId>` so memory still scopes cleanly
@@ -11,6 +17,7 @@ export interface NormalizedMessage {
   userId: string;
   userName?: string;
   text: string;
+  images?: NormalizedImage[];  // attached images (charts) for vision analysis
   receivedAt: Date;
 }
 

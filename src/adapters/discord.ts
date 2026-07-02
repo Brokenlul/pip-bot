@@ -10,7 +10,7 @@ import {
   MessageFlags,
 } from 'discord.js';
 import { getConfig } from '../config.js';
-import { NormalizedMessage, NormalizedReply, PlatformAdapter } from './platform.js';
+import { NormalizedMessage, NormalizedImage, NormalizedReply, PlatformAdapter } from './platform.js';
 import { fmtUtcHm } from '../core/util.js';
 
 export const PAUL_COMMAND_NAME = 'paul';
@@ -18,6 +18,19 @@ export const PAUL_QUESTION_OPTION = 'question';
 
 const PAUL_BLUE = 0x2b6cb0;
 const MAX_QUESTION_LEN = 1000;
+
+// Vision limits. The Anthropic API caps a single image at ~5MB; keep a few
+// per message so a user can drop an HTF + LTF pair. Anything larger/other is
+// silently skipped — a flaky attachment must never sink the reply.
+const MAX_IMAGES = 4;
+const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
+const SUPPORTED_IMAGE_TYPES: Record<string, NormalizedImage['mediaType']> = {
+  'image/png': 'image/png',
+  'image/jpeg': 'image/jpeg',
+  'image/jpg': 'image/jpeg',
+  'image/gif': 'image/gif',
+  'image/webp': 'image/webp',
+};
 
 export class DiscordAdapter implements PlatformAdapter {
   private client: Client | null = null;
@@ -121,7 +134,8 @@ export class DiscordAdapter implements PlatformAdapter {
     if (message.partial) {
       try {
         await message.fetch();
-      } catch {
+      } catch (e) {
+        console.warn(`[discord] partial fetch failed (DM channel not resolvable?): ${(e as Error).message}`);
         return;
       }
     }
@@ -130,6 +144,16 @@ export class DiscordAdapter implements PlatformAdapter {
     const botId = this.client.user.id;
     const isDM = !message.inGuild();
     const mentioned = message.mentions.users.has(botId);
+    // Visibility for the DM path — if this never logs when you DM the bot, the
+    // event isn't reaching us (Dev Portal "Message Content Intent" off, or the
+    // user shares no guild / has DMs closed), not a bug in the code below.
+    if (isDM) {
+      console.log(
+        `[discord] DM from ${message.author?.tag ?? message.author?.id} · content ${
+          message.content ? 'present' : 'EMPTY (Message Content Intent off?)'
+        }`,
+      );
+    }
     // In servers: only when @-mentioned. In DMs: always.
     if (!isDM && !mentioned) return;
 
@@ -138,10 +162,15 @@ export class DiscordAdapter implements PlatformAdapter {
       .trim()
       .slice(0, MAX_QUESTION_LEN);
 
-    if (!question) {
-      await message
-        .reply('Ask me something about markets — e.g. `what\'s BTC funding right now?` or `next CPI print?`')
-        .catch(() => {});
+    const images = await collectImages(message);
+
+    // A bare mention with neither text nor an image → nudge. With an image we
+    // proceed even if there's no caption ("read this chart" is implicit).
+    if (!question && images.length === 0) {
+      await this.send(
+        message,
+        'Ask me something about markets — e.g. `what\'s BTC funding right now?`, `next CPI print?`, or drop a chart screenshot.',
+      );
       return;
     }
 
@@ -160,14 +189,69 @@ export class DiscordAdapter implements PlatformAdapter {
         userId: message.author.id,
         userName: message.author.username,
         text: question,
+        images: images.length ? images : undefined,
         receivedAt: new Date(),
       };
-      const embed = await this.computeEmbed(msg, question);
-      await message.reply({ embeds: [embed] }).catch(() => {});
+      const label = question || (images.length ? `[${images.length} chart image${images.length > 1 ? 's' : ''}]` : '');
+      const embed = await this.computeEmbed(msg, label);
+      await this.send(message, { embeds: [embed] });
     } finally {
       clearInterval(typingTimer);
     }
   }
+
+  /**
+   * Send a reply, surfacing failures instead of swallowing them. `message.reply`
+   * attaches a reply-reference that is flaky in DMs (partial message, deleted
+   * ref, or 50007 "Cannot send messages to this user") — on failure we log the
+   * real Discord error and fall back to a plain channel send.
+   */
+  private async send(
+    message: Message,
+    payload: string | { embeds: EmbedBuilder[] },
+  ): Promise<void> {
+    try {
+      await message.reply(payload);
+    } catch (e) {
+      const err = e as { code?: number; message?: string };
+      console.error(`[discord] reply failed (code ${err.code ?? '?'}): ${err.message ?? e}`);
+      if (message.channel.isSendable()) {
+        await message.channel
+          .send(payload)
+          .catch((e2) => console.error(`[discord] channel.send fallback failed: ${(e2 as Error).message}`));
+      }
+    }
+  }
+}
+
+/**
+ * Pull image attachments off a message, fetch their bytes, and base64-encode
+ * for the vision API. Best-effort: unsupported types, oversized files, and
+ * failed fetches are skipped rather than thrown — a bad attachment must never
+ * sink the reply. Discord CDN URLs are signed/public, so no auth header needed.
+ */
+async function collectImages(message: Message): Promise<NormalizedImage[]> {
+  const out: NormalizedImage[] = [];
+  for (const att of message.attachments.values()) {
+    if (out.length >= MAX_IMAGES) break;
+    const ct = att.contentType?.split(';')[0]?.trim().toLowerCase();
+    const mediaType = ct ? SUPPORTED_IMAGE_TYPES[ct] : undefined;
+    if (!mediaType) continue;
+    if (att.size > MAX_IMAGE_BYTES) {
+      console.warn(`[discord] skipping oversized image (${att.size} bytes): ${att.name}`);
+      continue;
+    }
+    try {
+      const res = await fetch(att.url);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const buf = Buffer.from(await res.arrayBuffer());
+      if (buf.byteLength > MAX_IMAGE_BYTES) continue;
+      out.push({ mediaType, dataBase64: buf.toString('base64') });
+    } catch (e) {
+      console.warn(`[discord] failed to fetch image ${att.name}: ${(e as Error).message}`);
+    }
+  }
+  return out;
 }
 
 function toEmbed(reply: NormalizedReply, question: string): EmbedBuilder {

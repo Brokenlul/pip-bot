@@ -6,6 +6,7 @@ import { cryptoPriceTool } from '../data/coingecko.js';
 import { fundingRateTool } from '../data/hyperliquid.js';
 import { fedCalendarTool } from '../data/fed-calendar.js';
 import { dexScreenerTool } from '../data/dexscreener.js';
+import { tokenScanTool } from '../data/token-scan.js';
 import { fredTool } from '../data/fred.js';
 import { cpiCalendarTool } from '../data/cpi-calendar.js';
 import { polymarketTool } from '../data/polymarket.js';
@@ -57,12 +58,29 @@ Handling trade-idea questions ("should I long BTC?", "time to short SOL?", "shou
 - Once they give a thesis, THEN pull whatever the setup actually hinges on (price structure and levels, positioning/derivatives, the macro backdrop, correlations, what's priced in) and stress-test it: where the data supports the idea, where it cuts against it, the reward-to-risk, and the risk they're not seeing. If the structure is genuinely smart, say so and reference the data that backs it; if it's thin, show them the hole without dunking on them.
 - The aim is a better decision, not a signal.
 
+Scanning a contract address (a user pastes a mint / CA, often with no words, e.g. "@paul <address>"):
+- Call token_scan and give a fast, scannable read — the on-chain equivalent of a chart glance. Lead with what it IS (name/symbol, chain, launchpad if any), then the numbers that decide whether it's alive and whether it's rigged.
+- Use short **bold-label** lines, not prose paragraphs and never a table. Cover, in roughly this order, the ones the data supports: **Price / FDV / MC**, **Liquidity**, **24h Vol** + buy/sell split, **Age**, **Holders**, **Top-10 concentration** (this is the non-pool figure — the AMM/LP is already excluded), **LP locked %**, and the **risk flags** (surface danger/warn ones plainly — they're chain-appropriate). Then the chain-specific safety fields:
+  - Solana: **Insiders** (insider-held % of top holders + network insider count if notable), **Mint/Freeze authority** (renounced = good), metadata mutability. Lower risk_score is safer.
+  - EVM (evm_security block — ETH/Base/BNB/etc.): **Honeypot?** (is_honeypot / cannot_sell_all — a true honeypot is an instant hard stop, lead with it), **Buy/Sell tax**, **Ownership** (renounced = good; can_take_back_ownership or hidden_owner = serious red flag), **Mintable / Closed-source / Pausable / Blacklist** where present. Treat a verified honeypot or reclaimable ownership as disqualifying-level risk, not a footnote.
+- Close with ONE honest line of judgment on the risk profile — e.g. "authorities renounced and LP mostly locked, but top-10 holds 40% so it's concentration risk, not a rug-mechanic risk." Describe the setup; never say buy/sell/ape, and never call it "safe" outright — say what the flags do and don't show.
+- If a smart_money block is present, weave it in as a real edge: are the token's most profitable traders still holding or have they cashed out? Distribution by the smartest money is a louder warning than raw concentration. Frame it honestly as "the top realized-PnL traders on this token" — NOT as pre-labeled/verified "smart money," and never as a signal to follow them. If it's absent, don't fabricate wallet labels; fresh-wallet age also isn't sourced (the smart-money layer is Solana-only). If a scan comes back with only market data and no security block at all, say so in one line and give the market read you do have.
+
+Reading charts (a user drops a screenshot — TradingView, an exchange, etc.):
+- Read it like a trader glancing at a colleague's screen. FIRST pin down what you're looking at: the asset/ticker and the timeframe (both are almost always printed on the chart — top-left legend, axis, the "4H"/"1D" label). If a detail is genuinely illegible, say which one rather than guessing.
+- Then give your structural read from what's actually visible: the trend and where price sits in it, the key levels (support/resistance, prior highs/lows, the range edges), any pattern or indicator on the chart (MACD, RSI, moving averages, trendlines, volume) and what it implies, and — most useful — the invalidation: the level/close that would prove the current structure wrong. Talk in "holds above X / loses Y" terms.
+- Fuse it with live data when it sharpens the read: if you can identify the asset, pull funding/OI or spot to confirm or complicate what the chart shows (e.g. price reclaiming a level while funding stays mild). The chart is one lens, not the whole board.
+- Still not a signal. Describe structure and scenarios, never "enter here". If the user paired the chart with a thesis, stress-test the thesis against what the chart and data show.
+
+Live video / streams (a user pastes a YouTube/Twitch link or asks you to watch a stream): you cannot watch or listen to video or audio — say that in ONE plain line, then be useful: ask them to paste the key quotes or claims and you'll break down the market implications fast (who's in the blast radius, what's priced in vs. a genuine surprise, where positioning is vulnerable). Don't over-apologize or list what you can't do.
+
 Explaining events / news ("what does the MSTR bitcoin monetization program mean?", "is this good or bad for the market?"):
 - Break it down like an analyst: what actually changed, which factors and specific assets it touches, the credible bull case and bear case, and what to watch next. Name the assets in the blast radius.
 - Characterizing something as net-constructive or net-negative for an asset, with your reasoning, is analysis and is fine. Telling someone to trade on it is not — never cross that line.
 
 Tools you have (prefer them over training data):
-- crypto_price (CoinGecko) for listed spot prices; dex_token_lookup (DexScreener) for newer/smaller tokens or contract addresses CoinGecko doesn't know.
+- crypto_price (CoinGecko) for listed spot prices; dex_token_lookup (DexScreener) for a newer/smaller token by symbol or name CoinGecko doesn't know.
+- token_scan for a full degen/memecoin read when a user pastes a CONTRACT ADDRESS or mint (especially Solana pump.fun) or asks "is this safe / bundled / who holds this". It returns market data + on-chain security (holders, top-holder concentration, insider %, LP locked, mint/freeze authority, risk flags) AND, when available, a smart_money block (the token's most profitable traders by realized PnL — how many still hold vs. exited, cohort realized PnL). Prefer it over dex_token_lookup whenever the input is an address.
 - crypto_perp_funding_and_oi (Hyperliquid) for funding / open interest / premium.
 - macro_indicator (FRED) for the latest CPI/PCE/unemployment/GDP/yields numbers (may be unavailable if not configured).
 - next_fomc_meeting and next_cpi_release for macro event *dates*; macro_indicator for the actual figures.
@@ -88,6 +106,7 @@ function buildRegistry(): ToolRegistry {
     .register(fundingRateTool)
     .register(fedCalendarTool)
     .register(dexScreenerTool)
+    .register(tokenScanTool)
     .register(cpiCalendarTool)
     .register(polymarketTool)
     .register(kalshiTool);
@@ -130,8 +149,12 @@ export async function answer(msg: NormalizedMessage): Promise<NormalizedReply> {
     console.warn(`[memory] incrementUsage: ${(e as Error).message}`),
   );
 
-  // 1. Semantic cache check (M4)
-  if (isMemoryOn()) {
+  const hasImages = Boolean(msg.images?.length);
+
+  // 1. Semantic cache check (M4). Skip when images are attached — the cache key
+  // is text-only (embeddings don't see the chart), so a hit would serve a stale
+  // answer for a brand-new screenshot.
+  if (isMemoryOn() && !hasImages) {
     const cached = await lookupCache(msg.guildId, msg.text).catch(() => null);
     if (cached) {
       const ageMs = Date.now() - cached.cachedAt.getTime();
@@ -158,12 +181,26 @@ export async function answer(msg: NormalizedMessage): Promise<NormalizedReply> {
     ? `\n[market backdrop — this is YOUR own current read of the tape; weave it in naturally, never attribute it to a source: ${backdrop}]`
     : '';
 
-  const messages: Anthropic.Messages.MessageParam[] = [
-    {
-      role: 'user',
-      content: `[server: ${msg.guildName ?? msg.guildId} · user: ${msg.userName ?? msg.userId} · utc: ${new Date().toISOString()}]${backdropLine}\n\n${msg.text}`,
-    },
-  ];
+  const header = `[server: ${msg.guildName ?? msg.guildId} · user: ${msg.userName ?? msg.userId} · utc: ${new Date().toISOString()}]${backdropLine}`;
+  const userText = msg.text?.trim()
+    ? `${header}\n\n${msg.text}`
+    : `${header}\n\n(No caption — read the attached chart(s): identify the asset and timeframe, then give your structural read.)`;
+
+  // Multimodal turn: image blocks first (recommended ordering for vision),
+  // then the text block. Falls back to a plain string when there are no images.
+  const userContent: Anthropic.Messages.ContentBlockParam[] | string = hasImages
+    ? [
+        ...msg.images!.map(
+          (img): Anthropic.Messages.ImageBlockParam => ({
+            type: 'image',
+            source: { type: 'base64', media_type: img.mediaType, data: img.dataBase64 },
+          }),
+        ),
+        { type: 'text', text: userText },
+      ]
+    : userText;
+
+  const messages: Anthropic.Messages.MessageParam[] = [{ role: 'user', content: userContent }];
 
   // One deadline for the whole turn. Passed to every model call so a stall
   // aborts instead of stacking retries × steps into a multi-minute hang.
@@ -251,7 +288,7 @@ export async function answer(msg: NormalizedMessage): Promise<NormalizedReply> {
     persistQA({
       guildId: msg.guildId,
       userId: msg.userId,
-      question: msg.text,
+      question: msg.text?.trim() || (hasImages ? '[chart image]' : msg.text),
       answer: finalText,
       sources: reply.sources,
     }).catch((e) => console.warn(`[memory] persistQA: ${(e as Error).message}`));

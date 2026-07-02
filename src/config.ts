@@ -15,6 +15,9 @@ const Schema = z.object({
   COINGECKO_API_KEY: z.string().optional(),
   FRED_API_KEY: z.string().optional(),
   VOYAGE_API_KEY: z.string().optional(),
+  // Solana Tracker (data.solanatracker.io) — free tier, no card. Enriches
+  // token_scan with per-token top-traders-by-PnL (the smart-money proxy).
+  SOLANA_TRACKER_API_KEY: z.string().optional(),
 
   // AI Wealth Manager companion API (read-only market understanding).
   // Tools + ambient backdrop load only when PAUL_API_KEY is set.
@@ -66,4 +69,9 @@ export function fredEnabled(cfg: Config = getConfig()): boolean {
 /** AI Wealth Manager companion API. Tools + backdrop load only when its key is set. */
 export function companionApiEnabled(cfg: Config = getConfig()): boolean {
   return Boolean(cfg.PAUL_API_KEY);
+}
+
+/** Solana Tracker smart-money enrichment for token_scan. Needs a (free) key. */
+export function solanaTrackerEnabled(cfg: Config = getConfig()): boolean {
+  return Boolean(cfg.SOLANA_TRACKER_API_KEY);
 }
