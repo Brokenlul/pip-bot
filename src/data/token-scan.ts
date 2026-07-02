@@ -159,7 +159,9 @@ interface RcReport {
   knownAccounts?: Record<string, { name?: string; type?: string }>;
   markets?: { lp?: { lpLockedPct?: number; baseUSD?: number; quoteUSD?: number } }[];
   deployPlatform?: string;
-  launchpad?: string;
+  // RugCheck returns this as a rich object ({ name, platform, … }) for
+  // pump.fun-style tokens and a bare string for others — handle both.
+  launchpad?: string | { name?: string; platform?: string } | null;
 }
 
 const POOL_TYPE = /amm|pool|market|lp|liquidity/i;
@@ -518,7 +520,10 @@ export const tokenScanTool: Tool<Input, Output> = {
             metadata_mutable: rc?.tokenMeta?.mutable ?? null,
             rugged: rc?.rugged ?? null,
             risk_score: rc?.score_normalised ?? null,
-            launchpad: normalizeLaunchpad(rc?.launchpad ?? rc?.deployPlatform),
+            launchpad: normalizeLaunchpad(
+              (typeof rc?.launchpad === 'object' ? rc?.launchpad?.name : rc?.launchpad) ??
+                rc?.deployPlatform,
+            ),
             rugcheck_url: rc ? `https://rugcheck.xyz/tokens/${address}` : null,
             evm_security: evm?.evm ?? null,
             smart_money: sm,
@@ -539,8 +544,8 @@ function round2(n: number): number {
   return Math.round(n * 100) / 100;
 }
 
-function normalizeLaunchpad(v: string | undefined): string | null {
-  if (!v) return null;
+function normalizeLaunchpad(v: unknown): string | null {
+  if (typeof v !== 'string') return null;
   const t = v.trim();
   return t && t.toLowerCase() !== 'unknown' ? t : null;
 }
