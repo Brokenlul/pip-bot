@@ -4,7 +4,7 @@ import { recentQuestions } from '../memory/store.js';
 
 /**
  * Lets Claude answer "what have we asked about lately" from per-guild memory.
- * This is what proves the moat to the user — Paul references the *server's*
+ * This is what proves the moat to the user — Pip references the *server's*
  * history, not a generic LLM's vague "I don't know".
  */
 const InputSchema = z.object({
@@ -20,7 +20,7 @@ interface Output {
 export const recentQuestionsTool: Tool<Input, Output> = {
   name: 'recent_guild_questions',
   description:
-    "Recall the recent questions and answers asked in THIS Discord guild. Use this when the user asks meta questions like 'what have we asked about lately', 'what's been discussed', 'remind us what came up before', or to ground a follow-up in recent server history. Do NOT use for the user's own factual question — use the data tools for that.",
+    "Recall THIS user's own recent questions and answers with you. Use it when they ask meta questions like 'what have I asked lately', 'what did we cover', 'remind me what came up before', or to ground a follow-up in their recent history. Scoped to this user only — never another trader's questions. Do NOT use for a fresh factual question — use the data tools for that.",
   inputSchema: {
     type: 'object',
     properties: {
@@ -29,7 +29,8 @@ export const recentQuestionsTool: Tool<Input, Output> = {
   },
   validate: zValidator(InputSchema),
   execute: async (input, ctx: ToolContext) => {
-    const items = await recentQuestions(ctx.guildId, input.limit ?? 8);
+    // Privacy: scope recall to the requesting user, not the whole guild.
+    const items = await recentQuestions(ctx.guildId, input.limit ?? 8, ctx.userId);
     return {
       count: items.length,
       recent: items.map((i) => ({

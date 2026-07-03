@@ -16,10 +16,18 @@ import { getConfig, solanaTrackerEnabled } from '../config.js';
  * labeled-wallet DB (Nansen/Arkham/GMGN) — not sourced here, don't fabricate.
  */
 
+// Accept only a real Solana base58 mint (32–44 chars, no 0/O/I/l) or an EVM
+// 0x address. This keeps junk / injection strings out of the outbound API URLs
+// (DexScreener, RugCheck, GoPlus) instead of relaying whatever the model passes.
+const EVM_ADDR_RE = /^0x[a-fA-F0-9]{40}$/;
+const SOL_ADDR_RE = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
 const InputSchema = z.object({
   address: z
     .string()
-    .min(1)
+    .trim()
+    .refine((a) => EVM_ADDR_RE.test(a) || SOL_ADDR_RE.test(a), {
+      message: 'Not a valid contract address (expected an EVM 0x… address or a Solana base58 mint).',
+    })
     .describe('Token contract address / mint (Solana base58 or EVM 0x…).'),
 });
 type Input = z.infer<typeof InputSchema>;
@@ -256,7 +264,7 @@ interface GoPlusResult {
 }
 
 async function goPlusCall(chainId: string, address: string): Promise<GoPlusResult | null> {
-  const url = `https://api.gopluslabs.io/api/v1/token_security/${chainId}?contract_addresses=${address}`;
+  const url = `https://api.gopluslabs.io/api/v1/token_security/${chainId}?contract_addresses=${encodeURIComponent(address)}`;
   const res = await fetchWithTimeout(url, {}, 10_000);
   if (!res.ok) throw new Error(`goplus ${res.status}`);
   const data = (await res.json()) as { code?: number; result?: Record<string, GoPlusResult> };
@@ -425,7 +433,7 @@ async function fetchSmartMoney(mint: string): Promise<SmartMoney | null> {
 
 // ---- Tool ----------------------------------------------------------------
 
-const EVM_RE = /^0x[a-fA-F0-9]{40}$/;
+const EVM_RE = EVM_ADDR_RE;
 const cache = makeCache<Output>(45_000);
 
 export const tokenScanTool: Tool<Input, Output> = {

@@ -4,7 +4,7 @@ import { getConfig } from '../config.js';
 import { makeCache, withRetry, fetchWithTimeout } from '../core/util.js';
 
 /**
- * Finnhub (finnhub.io) — equity data on the free tier. Powers Paul's
+ * Finnhub (finnhub.io) — equity data on the free tier. Powers Pip's
  * all-rounder equity coverage so a company's fundamentals, growth, and
  * earnings can be read alongside crypto (equities move risk appetite, and
  * HIP-3 tokenizes many of these same names on Hyperliquid).

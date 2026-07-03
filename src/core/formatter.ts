@@ -21,7 +21,7 @@ export function buildReply(opts: {
 
 /**
  * Discord does NOT render markdown tables — they show up as raw `| a | b |`
- * pipes (looks broken). The prompt tells Paul not to use them, but models slip,
+ * pipes (looks broken). The prompt tells Pip not to use them, but models slip,
  * so we convert any table into bullet lines as a safety net.
  *
  * A row like `| Funding positive | Longs paying shorts |` becomes
@@ -64,7 +64,7 @@ export function deTable(body: string): string {
 
 /** Plain-text rendering used when an embed isn't viable. */
 export function renderReplyText(reply: NormalizedReply): string {
-  // Sources intentionally omitted — Paul answers as its own brain (still
+  // Sources intentionally omitted — Pip answers as its own brain (still
   // persisted internally for debugging). Keep only the disclaimer + timestamp.
   const parts = [reply.body.trim()];
   parts.push(`\n_${reply.disclaimer ?? DEFAULT_DISCLAIMER} Data as of ${fmtUtcHm(reply.asOf)}._`);

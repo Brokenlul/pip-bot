@@ -7,12 +7,12 @@ import { getConfig } from '../config.js';
  * AI Wealth Manager — companion API (read-only "market understanding").
  * Contract: C:\Users\Pc\Paul-Bot\PAUL_API.md. All routes under /api/paul/.
  *
- * This is Paul's analytical backbone: the current regime + prose market read
+ * This is Pip's analytical backbone: the current regime + prose market read
  * (ambient, pulled before every answer), plus deeper pulls on demand — strategy
  * postures, the cross-sectional long/short ranking, and per-coin directional
  * theses. It exposes *understanding*, never the underlying signal maths.
  *
- * Guardrail: Paul presents all of this as its OWN read (no source attribution),
+ * Guardrail: Pip presents all of this as its OWN read (no source attribution),
  * and NEVER converts a "lean" or "basket" into a buy/sell call — it's context.
  */
 
@@ -116,7 +116,7 @@ type Input = z.infer<typeof InputSchema>;
 export const marketIntelTool: Tool<Input, unknown> = {
   name: 'market_intel',
   description:
-    "Pull Paul's own deeper market understanding: live book postures (strategies), the cross-sectional per-coin long/short standing with a qualitative read on trend / crowd positioning / sentiment / volatility (ranking), or the per-coin directional thesis vs key levels (directional). Use it to ground a coin-specific take or to stress-test a user's thesis. Present it as YOUR read — never attribute it to a source, and never turn a 'lean' or 'basket' into a buy/sell call.",
+    "Pull Pip's own deeper market understanding: live book postures (strategies), the cross-sectional per-coin long/short standing with a qualitative read on trend / crowd positioning / sentiment / volatility (ranking), or the per-coin directional thesis vs key levels (directional). Use it to ground a coin-specific take or to stress-test a user's thesis. Present it as YOUR read — never attribute it to a source, and never turn a 'lean' or 'basket' into a buy/sell call.",
   inputSchema: {
     type: 'object',
     properties: {

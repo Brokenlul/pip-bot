@@ -132,15 +132,18 @@ export async function persistQA(opts: {
 export async function recentQuestions(
   guildId: string,
   limit = 8,
+  userId?: string,
 ): Promise<RecentQuestion[]> {
   const db = getDb();
   if (!db) return [];
-  const { data, error } = await db
+  // Privacy: when a userId is given, recall is scoped to THAT trader's own
+  // history — Pip never surfaces one trader's questions to another.
+  let q = db
     .from('conversations')
     .select('question, answer, user_id, created_at')
-    .eq('guild_id', guildId)
-    .order('created_at', { ascending: false })
-    .limit(limit);
+    .eq('guild_id', guildId);
+  if (userId) q = q.eq('user_id', userId);
+  const { data, error } = await q.order('created_at', { ascending: false }).limit(limit);
   if (error) {
     console.warn(`[memory] recentQuestions: ${error.message}`);
     return [];
@@ -151,6 +154,50 @@ export async function recentQuestions(
     askedAt: new Date(r.created_at),
     userId: r.user_id,
   }));
+}
+
+export interface ThreadTurn {
+  question: string;
+  answer: string;
+  askedAt: Date;
+}
+
+/**
+ * Recent back-and-forth for ONE user in ONE chat, oldest-first — the material
+ * for multi-turn continuity. Scoped to (guild_id, user_id) so a follow-up like
+ * "any smart money in this?" threads to that user's own last exchanges, not the
+ * whole server's. Bounded by a recency window so a stale conversation from days
+ * ago isn't dragged in as "context" for an unrelated new question.
+ */
+export async function recentThread(
+  guildId: string,
+  userId: string,
+  opts: { windowMinutes?: number; limit?: number } = {},
+): Promise<ThreadTurn[]> {
+  const db = getDb();
+  if (!db) return [];
+  const windowMinutes = opts.windowMinutes ?? 45;
+  const limit = opts.limit ?? 6;
+  const since = new Date(Date.now() - windowMinutes * 60_000).toISOString();
+  const { data, error } = await db
+    .from('conversations')
+    .select('question, answer, created_at')
+    .eq('guild_id', guildId)
+    .eq('user_id', userId)
+    .gte('created_at', since)
+    .order('created_at', { ascending: false })
+    .limit(limit);
+  if (error) {
+    console.warn(`[memory] recentThread: ${error.message}`);
+    return [];
+  }
+  // Fetched newest-first (so LIMIT keeps the most recent); flip to chronological
+  // for the transcript. Drop any row missing text — an empty content block is
+  // rejected by the API and would sink the whole reply.
+  return (data ?? [])
+    .filter((r) => r.question?.trim() && r.answer?.trim())
+    .map((r) => ({ question: r.question, answer: r.answer, askedAt: new Date(r.created_at) }))
+    .reverse();
 }
 
 export async function incrementUsage(guildId: string): Promise<void> {

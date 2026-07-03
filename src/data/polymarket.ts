@@ -4,7 +4,7 @@ import { makeCache, withRetry, fetchWithTimeout } from '../core/util.js';
 
 /**
  * Polymarket (Gamma API) — prediction-market odds. Keyless.
- * This gives Paul "what the market is pricing in" reads, e.g.
+ * This gives Pip "what the market is pricing in" reads, e.g.
  * "Polymarket has a July Fed hold at 80%". `public-search` supports free text.
  * Docs: https://docs.polymarket.com/
  */

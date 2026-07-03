@@ -10,7 +10,7 @@ import { makeCache, withRetry, fetchWithTimeout } from '../core/util.js';
  * Docs: https://www.sec.gov/os/accessing-edgar-data
  */
 
-const UA = { 'User-Agent': 'Paul-Bot market-research bot (contact via Discord)' };
+const UA = { 'User-Agent': 'Pip-Bot market-research bot (contact via Discord)' };
 
 // ticker -> { cik (10-digit), title }
 interface TickerRow {

@@ -4,7 +4,7 @@ import { makeCache, withRetry, fetchWithTimeout } from '../core/util.js';
 
 /**
  * Hyperliquid public API — funding + open interest for perps.
- * This is the differentiator: it's what lets Paul say
+ * This is the differentiator: it's what lets Pip say
  * "funding flipped negative across BTC perps", which a vanilla LLM can't.
  *
  * Docs: https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/info-endpoint

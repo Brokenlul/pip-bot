@@ -4,19 +4,37 @@ import {
   Partials,
   EmbedBuilder,
   Events,
-  Interaction,
   Message,
-  ChatInputCommandInteraction,
-  MessageFlags,
+  MessageReaction,
+  PartialMessageReaction,
+  User,
+  PartialUser,
 } from 'discord.js';
 import { getConfig } from '../config.js';
-import { NormalizedMessage, NormalizedImage, NormalizedReply, PlatformAdapter } from './platform.js';
+import {
+  NormalizedMessage,
+  NormalizedImage,
+  NormalizedReply,
+  PlatformAdapter,
+  MessageHandler,
+  AnswerOptions,
+} from './platform.js';
+import { betaGate, setFounderNotifier, recordFeedback, type GateDecision } from '../beta/guardrails.js';
 import { fmtUtcHm } from '../core/util.js';
 
-export const PAUL_COMMAND_NAME = 'paul';
-export const PAUL_QUESTION_OPTION = 'question';
+// Pip is @-mention / DM only — no slash command. Servers: @-mention in an
+// allowed channel; DMs: just message it.
 
-const PAUL_BLUE = 0x2b6cb0;
+// Feedback reactions → rating. 👍/✅/🔥 = positive, 👎/❌ = negative.
+const RATING_EMOJI: Record<string, 'up' | 'down'> = {
+  '👍': 'up', '✅': 'up', '🔥': 'up',
+  '👎': 'down', '❌': 'down',
+};
+
+// Brand accent — Pip Green (#12A15A). The 4px embed side-bar per the PIP brand book.
+const PIP_GREEN = 0x12a15a;
+// Negative/error state — Clay (#C25B37), the brand's only non-accent data color.
+const PIP_CLAY = 0xc25b37;
 const MAX_QUESTION_LEN = 1000;
 
 // Vision limits. The Anthropic API caps a single image at ~5MB; keep a few
@@ -34,11 +52,13 @@ const SUPPORTED_IMAGE_TYPES: Record<string, NormalizedImage['mediaType']> = {
 
 export class DiscordAdapter implements PlatformAdapter {
   private client: Client | null = null;
-  private handler: ((msg: NormalizedMessage) => Promise<NormalizedReply>) | null = null;
+  private handler: MessageHandler | null = null;
 
-  async start(handler: (msg: NormalizedMessage) => Promise<NormalizedReply>): Promise<void> {
+  async start(handler: MessageHandler): Promise<void> {
     if (this.client) throw new Error('DiscordAdapter already started');
     this.handler = handler;
+    // Founder spend-alert DMs (50/80/100% of daily budget) route through Discord.
+    setFounderNotifier((userId, text) => this.dmUser(userId, text));
 
     const client = new Client({
       intents: [
@@ -47,20 +67,17 @@ export class DiscordAdapter implements PlatformAdapter {
         GatewayIntentBits.DirectMessages,
         // Privileged: enable "Message Content Intent" in the Dev Portal too.
         GatewayIntentBits.MessageContent,
+        // 👍/👎 feedback on Pip's answers (the pilot Quality metric).
+        GatewayIntentBits.GuildMessageReactions,
+        GatewayIntentBits.DirectMessageReactions,
       ],
-      // Needed so DM channels/messages (not cached) still fire MessageCreate.
-      partials: [Partials.Channel, Partials.Message],
+      // Partials so DM messages AND reactions on uncached messages still fire.
+      partials: [Partials.Channel, Partials.Message, Partials.Reaction, Partials.User],
     });
     this.client = client;
 
     client.once(Events.ClientReady, (c) => {
       console.log(`[discord] logged in as ${c.user.tag}, watching ${c.guilds.cache.size} guild(s)`);
-    });
-
-    client.on(Events.InteractionCreate, (interaction: Interaction) => {
-      this.handleInteraction(interaction).catch((e) => {
-        console.error('[discord] interaction handler crashed:', e);
-      });
     });
 
     client.on(Events.MessageCreate, (message: Message) => {
@@ -69,10 +86,18 @@ export class DiscordAdapter implements PlatformAdapter {
       });
     });
 
+    client.on(Events.MessageReactionAdd, (reaction, user) => {
+      this.handleReaction(reaction, user).catch((e) => {
+        console.error('[discord] reaction handler crashed:', e);
+      });
+    });
+
     client.on(Events.Error, (e) => console.error('[discord] client error:', e));
     client.on(Events.Warn, (w) => console.warn('[discord] warn:', w));
 
-    await client.login(getConfig().DISCORD_TOKEN);
+    const token = getConfig().DISCORD_TOKEN;
+    if (!token) throw new Error('DISCORD_TOKEN is not set — cannot start the Discord adapter.');
+    await client.login(token);
   }
 
   async stop(): Promise<void> {
@@ -80,50 +105,65 @@ export class DiscordAdapter implements PlatformAdapter {
     this.client = null;
   }
 
-  /** Shared: run the agent for a normalized message, returning a success or error embed. */
-  private async computeEmbed(msg: NormalizedMessage, question: string): Promise<EmbedBuilder> {
+  /** Record a 👍/👎 on one of Pip's answers → pilot Quality metric. */
+  private async handleReaction(
+    reaction: MessageReaction | PartialMessageReaction,
+    user: User | PartialUser,
+  ): Promise<void> {
+    if (user.bot || !this.client?.user) return;
+    const rating = RATING_EMOJI[reaction.emoji.name ?? ''];
+    if (!rating) return; // only count thumbs up/down
     try {
-      const reply = await this.handler!(msg);
+      if (reaction.partial) await reaction.fetch();
+      if (reaction.message.partial) await reaction.message.fetch();
+    } catch {
+      return; // couldn't hydrate — skip
+    }
+    // Only reactions on PIP's own answers count.
+    if (reaction.message.author?.id !== this.client.user.id) return;
+    const guildId = reaction.message.guildId ?? `dm:${user.id}`;
+    await recordFeedback({
+      platform: 'discord',
+      guildId,
+      messageId: reaction.message.id,
+      raterId: user.id,
+      rating,
+    }).catch((e) => console.warn(`[discord] recordFeedback: ${(e as Error).message}`));
+  }
+
+  /** DM a user (founder spend alerts). Best-effort. */
+  private async dmUser(userId: string, text: string): Promise<void> {
+    try {
+      const user = await this.client?.users.fetch(userId);
+      await user?.send(text);
+    } catch (e) {
+      console.warn(`[discord] founder DM failed: ${(e as Error).message}`);
+    }
+  }
+
+  /** Map a gate decision to the agent's per-request feature budget. */
+  private optsFrom(d: GateDecision): AnswerOptions {
+    return {
+      allowWeb: d.features.web,
+      allowVision: d.features.vision,
+      allowScan: d.features.scan,
+      degraded: d.degraded,
+    };
+  }
+
+  /** Shared: run the agent for a normalized message, returning a success or error embed. */
+  private async computeEmbed(
+    msg: NormalizedMessage,
+    question: string,
+    opts: AnswerOptions,
+  ): Promise<EmbedBuilder> {
+    try {
+      const reply = await this.handler!(msg, opts);
       return toEmbed(reply, question);
     } catch (e) {
       console.error('[discord] answer failed:', e);
       return errorEmbed(e as Error);
     }
-  }
-
-  // ---- Slash command path (kept for backward compatibility) --------------
-
-  private async handleInteraction(interaction: Interaction): Promise<void> {
-    if (!interaction.isChatInputCommand()) return;
-    if (interaction.commandName !== PAUL_COMMAND_NAME) return;
-    if (!this.handler) return;
-    await this.handlePaul(interaction);
-  }
-
-  private async handlePaul(interaction: ChatInputCommandInteraction): Promise<void> {
-    const question = interaction.options.getString(PAUL_QUESTION_OPTION, true);
-    try {
-      await interaction.deferReply();
-    } catch (e) {
-      // 10062 = Discord considered the interaction expired (>3s to ACK).
-      if ((e as { code?: number }).code === 10062) {
-        console.warn(`[discord] interaction expired before defer (10062) — q="${question.slice(0, 60)}"`);
-        return;
-      }
-      throw e;
-    }
-
-    const guildId = interaction.guildId ?? `dm:${interaction.user.id}`;
-    const msg: NormalizedMessage = {
-      platform: 'discord',
-      guildId,
-      guildName: interaction.guild?.name,
-      userId: interaction.user.id,
-      userName: interaction.user.username,
-      text: question,
-      receivedAt: new Date(),
-    };
-    await interaction.editReply({ embeds: [await this.computeEmbed(msg, question)] }).catch(() => {});
   }
 
   // ---- Mention + DM path -------------------------------------------------
@@ -139,7 +179,12 @@ export class DiscordAdapter implements PlatformAdapter {
         return;
       }
     }
-    if (message.author?.bot) return; // never respond to bots (or ourselves) → no loops
+    // Ignore bots/self, webhooks, system messages, and @everyone/@here — these
+    // are the classic bot-loop / mass-mention runaway-cost vectors.
+    if (message.author?.bot) return;
+    if (message.webhookId) return;
+    if (message.system) return;
+    if (message.mentions.everyone) return;
 
     const botId = this.client.user.id;
     const isDM = !message.inGuild();
@@ -164,6 +209,25 @@ export class DiscordAdapter implements PlatformAdapter {
 
     const images = await collectImages(message);
 
+    const msg: NormalizedMessage = {
+      platform: 'discord',
+      guildId: isDM ? `dm:${message.author.id}` : message.guildId!,
+      guildName: isDM ? undefined : message.guild?.name,
+      channelId: message.channelId,
+      userId: message.author.id,
+      userName: message.author.username,
+      text: question,
+      images: images.length ? images : undefined,
+      receivedAt: new Date(),
+    };
+
+    // Beta gate — allowlist / caps / kill-switch — BEFORE any typing or LLM call.
+    const gate = await betaGate(msg);
+    if (!gate.allow) {
+      if (!gate.silent && gate.replyText) await this.send(message, gate.replyText);
+      return;
+    }
+
     // A bare mention with neither text nor an image → nudge. With an image we
     // proceed even if there's no caption ("read this chart" is implicit).
     if (!question && images.length === 0) {
@@ -182,18 +246,8 @@ export class DiscordAdapter implements PlatformAdapter {
     const typingTimer = setInterval(keepTyping, 8000);
 
     try {
-      const msg: NormalizedMessage = {
-        platform: 'discord',
-        guildId: isDM ? `dm:${message.author.id}` : message.guildId!,
-        guildName: isDM ? undefined : message.guild?.name,
-        userId: message.author.id,
-        userName: message.author.username,
-        text: question,
-        images: images.length ? images : undefined,
-        receivedAt: new Date(),
-      };
       const label = question || (images.length ? `[${images.length} chart image${images.length > 1 ? 's' : ''}]` : '');
-      const embed = await this.computeEmbed(msg, label);
+      const embed = await this.computeEmbed(msg, label, this.optsFrom(gate));
       await this.send(message, { embeds: [embed] });
     } finally {
       clearInterval(typingTimer);
@@ -275,9 +329,9 @@ function sniffImageType(buf: Buffer): NormalizedImage['mediaType'] | undefined {
 }
 
 function toEmbed(reply: NormalizedReply, question: string): EmbedBuilder {
-  const embed = new EmbedBuilder().setColor(PAUL_BLUE).setDescription(truncate(reply.body, 4000));
+  const embed = new EmbedBuilder().setColor(PIP_GREEN).setDescription(truncate(reply.body, 4000));
   if (reply.title) embed.setTitle(reply.title);
-  // Sources are intentionally NOT shown — Paul answers as its own brain. They're
+  // Sources are intentionally NOT shown — Pip answers as its own brain. They're
   // still collected and persisted (conversations.sources) for internal debugging.
   embed.setFooter({
     text: `${reply.disclaimer ?? 'Not financial advice.'} · Asked: ${truncate(question, 80)} · As of ${fmtUtcHm(reply.asOf)}`,
@@ -285,17 +339,17 @@ function toEmbed(reply: NormalizedReply, question: string): EmbedBuilder {
   return embed;
 }
 
-function errorEmbed(e: Error): EmbedBuilder {
+// The real error is already logged server-side (computeEmbed). Never surface raw
+// exception text to users — it can leak internal details (stack, URLs, provider
+// errors) and is noise to a trader. Show a fixed, friendly line instead.
+function errorEmbed(_e: Error): EmbedBuilder {
   return new EmbedBuilder()
-    .setColor(0xc53030)
-    .setTitle('Paul hit a snag')
-    .setDescription(`\`${e.message}\``)
+    .setColor(PIP_CLAY)
+    .setTitle('Pip hit a snag')
+    .setDescription("Something went wrong pulling that together. Try again in a moment.")
     .setFooter({ text: 'Try again in a moment.' });
 }
 
 function truncate(s: string, n: number): string {
   return s.length <= n ? s : `${s.slice(0, n - 1)}…`;
 }
-
-// `MessageFlags.Ephemeral` re-export silences an unused-import warning if discord.js changes
-export { MessageFlags };

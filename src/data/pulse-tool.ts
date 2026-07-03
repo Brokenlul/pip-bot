@@ -4,8 +4,8 @@ import { trendingTopics } from '../memory/pulse.js';
 
 /**
  * Cross-community situational awareness. Returns the anonymized aggregate of
- * which assets / macro themes people are asking Paul about across ALL servers
- * and DMs — never any raw question, community, or user. Lets Paul say "funding
+ * which assets / macro themes people are asking Pip about across ALL servers
+ * and DMs — never any raw question, community, or user. Lets Pip say "funding
  * and SOL are what the desk is chewing on right now" to sharpen a read.
  */
 const InputSchema = z.object({

@@ -1,0 +1,8 @@
+{
+  "name": "pip-dashboard",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Read-only analytics for the Pip beta — spend, usage, and caps over Supabase usage_log.",
+  "scripts": { "dev": "node dev-server.mjs" },
+  "engines": { "node": ">=18" }
+}

@@ -6,7 +6,7 @@ import { getDb } from './db.js';
  * The ONLY thing shared across servers/DMs is an aggregate count of which
  * *topics* (assets + macro themes) people are asking about — never raw text,
  * never which community or user. Per-guild memory stays siloed (see store.ts);
- * this layer gives Paul situational awareness ("SOL and funding are hot right
+ * this layer gives Pip situational awareness ("SOL and funding are hot right
  * now across communities") without leaking anyone's specifics.
  */
 
