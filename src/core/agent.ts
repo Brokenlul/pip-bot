@@ -25,6 +25,7 @@ import {
 import { ToolRegistry, ToolContext } from '../data/registry.js';
 import { cryptoPriceTool } from '../data/coingecko.js';
 import { fundingRateTool } from '../data/hyperliquid.js';
+import { whalePositionsTool } from '../data/hl-whales.js';
 import { fedCalendarTool } from '../data/fed-calendar.js';
 import { dexScreenerTool } from '../data/dexscreener.js';
 import { tokenScanTool } from '../data/token-scan.js';
@@ -147,6 +148,7 @@ Tools you have (prefer them over training data):
 - crypto_market_overview (DefiLlama + Fear & Greed) for the top-down backdrop: total DeFi TVL, biggest chains, total stablecoin supply (dry powder), 24h DEX volume + fees, and the Fear & Greed index. defi_protocol for a specific protocol's TVL / 1d-7d change / fees / revenue — the protocol's actual business, not just token price.
 - sec_filings for a US company's recent official filings (10-K/10-Q reports, 8-K material events, Form 4 insider trades) with dates + links — ground-truth events. financial_news (Finnhub, may be unavailable) for recent company or market/crypto news headlines. equity_financial_statements (FMP, may be unavailable) for full line-item income/balance/cash-flow statements over the last few periods.
 - crypto_perp_funding_and_oi (Hyperliquid) for funding / open interest / premium / mark price. Covers standard perps (BTC, ETH, SOL…) AND builder-deployed (HIP-3) markets — tokenized equities and thematic baskets like BOT, TSLA, NVDA, ROBOT, OPENAI. If a user asks "what is <name> on Hyperliquid" for something that isn't a normal coin, try this tool with the ticker — it auto-resolves the builder venue; if it returns data, the thing is a live Hyperliquid market and you can describe its mark/funding/OI.
+- hyperliquid_whale_positions for what the biggest / most profitable traders on Hyperliquid are actually holding — live open positions with entry price, direction, size, unrealized PnL, leverage, and liquidation, plus long/short totals and weighted average entries. Use it for "whale entries", "whale uPnL", "are whales long or short X" on any standard Hyperliquid perp (HYPE included — this IS the way to read whales on HYPE); omit the coin for a cross-market view. Frame them as the venue's top realized-PnL leaderboard traders — never as verified "smart money", and never as a signal to copy their book.
 - macro_indicator (FRED) for the latest CPI/PCE/unemployment/GDP/yields numbers (may be unavailable if not configured).
 - next_fomc_meeting and next_cpi_release for macro event *dates*; macro_indicator for the actual figures.
 - prediction_market_polymarket and prediction_market_kalshi for market-implied odds ("what's priced in"). For a macro question like a Fed cut, reading both is a strong differentiated angle.
@@ -174,6 +176,7 @@ function buildRegistry(): ToolRegistry {
   reg
     .register(cryptoPriceTool)
     .register(fundingRateTool)
+    .register(whalePositionsTool)
     .register(fedCalendarTool)
     .register(dexScreenerTool)
     .register(tokenScanTool)
@@ -387,9 +390,26 @@ export async function answer(msg: NormalizedMessage, opts: AnswerOptions = {}): 
   const maxSteps = beta ? CAPS.perRequest.maxLoopTurns : MAX_AGENT_STEPS;
 
   let finalText = '';
+  let forcedNoteSent = false;
   for (let step = 0; step < maxSteps; step++) {
-    // Once the per-request tool budget is spent, force a text answer.
-    const forceAnswer = beta && toolCallCount >= CAPS.perRequest.maxToolCalls;
+    // Once the per-request tool budget is spent — or this is the last loop
+    // turn — force a text answer instead of letting the model burn the step
+    // on another tool call and leave us with nothing to send.
+    const forceAnswer =
+      (beta && toolCallCount >= CAPS.perRequest.maxToolCalls) || step === maxSteps - 1;
+    // Silently flipping tool_choice to "none" is how raw <invoke> XML ends up
+    // in Discord: the model still "wants" a tool and writes the call as text.
+    // Tell it why tools stopped so it answers cleanly from what it has.
+    if (forceAnswer && !forcedNoteSent && toolCallCount > 0) {
+      forcedNoteSent = true;
+      const last = messages[messages.length - 1];
+      if (last?.role === 'user' && Array.isArray(last.content)) {
+        (last.content as Anthropic.Messages.ContentBlockParam[]).push({
+          type: 'text',
+          text: '[The tool budget for this reply is spent. Answer now from what you already have — plain prose only. Do not write out, simulate, or mention any further tool calls.]',
+        });
+      }
+    }
     let resp: Anthropic.Messages.Message;
     try {
       resp = await getClient().messages.create(
@@ -434,11 +454,12 @@ export async function answer(msg: NormalizedMessage, opts: AnswerOptions = {}): 
     }
 
     if (resp.stop_reason !== 'tool_use') {
-      finalText = resp.content
-        .filter((b): b is Anthropic.Messages.TextBlock => b.type === 'text')
-        .map((b) => b.text)
-        .join('\n')
-        .trim();
+      finalText = stripToolCallText(
+        resp.content
+          .filter((b): b is Anthropic.Messages.TextBlock => b.type === 'text')
+          .map((b) => b.text)
+          .join('\n'),
+      );
       break;
     }
 
@@ -544,6 +565,19 @@ export async function answer(msg: NormalizedMessage, opts: AnswerOptions = {}): 
 
 function truncate(s: string, n: number): string {
   return s.length <= n ? s : `${s.slice(0, n - 1)}…`;
+}
+
+/**
+ * Backstop for pseudo-tool-call leakage: when tool_choice blocks a call the
+ * model still wants, it sometimes writes the invocation as literal XML-ish
+ * text. Strip complete blocks first, then any stray tags, so it never reaches
+ * the channel.
+ */
+function stripToolCallText(s: string): string {
+  return s
+    .replace(/<(?:antml:)?(function_calls|invoke|parameter)\b[^>]*>[\s\S]*?<\/(?:antml:)?\1>/g, '')
+    .replace(/<\/?(?:antml:)?(?:function_calls|invoke|parameter)\b[^>]*>/g, '')
+    .trim();
 }
 
 function dedupe(sources: SourceCitation[]): SourceCitation[] {

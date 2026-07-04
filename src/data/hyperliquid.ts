@@ -42,7 +42,7 @@ interface UniverseEntry {
   name: string;
 }
 
-async function hlInfo<T>(body: Record<string, unknown>): Promise<T> {
+export async function hlInfo<T>(body: Record<string, unknown>): Promise<T> {
   const res = await fetchWithTimeout('https://api.hyperliquid.xyz/info', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
