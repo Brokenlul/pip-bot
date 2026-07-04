@@ -21,6 +21,9 @@ const MAX_QUESTION_LEN = 1000;
 // Telegram caps a single message at 4096 chars; leave headroom for safety.
 const TG_MAX_MESSAGE = 4000;
 
+// Replied-to context is bounded — it rides inside the prompt on every turn.
+const MAX_REPLY_CONTEXT = 1500;
+
 // Vision limits mirror the Discord adapter — a user can drop an HTF + LTF pair.
 // Telegram compresses photos to JPEG; documents keep their type.
 const MAX_IMAGES = 4;
@@ -113,6 +116,12 @@ export class TelegramAdapter implements PlatformAdapter {
     const question = stripMention(rawText, botUsername).slice(0, MAX_QUESTION_LEN);
     const images = await this.collectImages(ctx);
 
+    // Carry the replied-to message's text — it's the context "these"/"that"
+    // refers to, including answers the bot gave a DIFFERENT user (which the
+    // per-user thread memory deliberately can't see).
+    const rtm = message.reply_to_message;
+    const replyToText = (rtm?.text ?? rtm?.caption)?.trim().slice(0, MAX_REPLY_CONTEXT) || undefined;
+
     const msg: NormalizedMessage = {
       platform: 'telegram',
       // Namespace memory per chat, prefixed so a Telegram id can never collide
@@ -124,6 +133,8 @@ export class TelegramAdapter implements PlatformAdapter {
       userName: ctx.from.username ?? ctx.from.first_name,
       text: question,
       images: images.length ? images : undefined,
+      replyToText,
+      replyToBot: replyToText ? rtm?.from?.id === botId : undefined,
       receivedAt: new Date(),
     };
 

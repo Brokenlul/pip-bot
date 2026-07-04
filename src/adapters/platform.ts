@@ -19,6 +19,14 @@ export interface NormalizedMessage {
   userName?: string;
   text: string;
   images?: NormalizedImage[];  // attached images (charts) for vision analysis
+  /**
+   * Text of the message this one replies to. Bridges context the per-user
+   * thread can't see — e.g. replying "chart these" to an answer the bot gave
+   * ANOTHER user. Only what's visibly quoted in the channel is carried.
+   */
+  replyToText?: string;
+  /** True when the replied-to message is the bot's own answer. */
+  replyToBot?: boolean;
   receivedAt: Date;
 }
 

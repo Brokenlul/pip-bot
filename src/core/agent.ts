@@ -269,9 +269,9 @@ export async function answer(msg: NormalizedMessage, opts: AnswerOptions = {}): 
 
   // 1. Semantic cache check (M4). Skip when images are attached — the cache key
   // is text-only (embeddings don't see the chart), so a hit would serve a stale
-  // answer for a brand-new screenshot. Also skip mid-conversation: a follow-up
-  // depends on the live thread, and a canned cache hit would ignore it.
-  if (isMemoryOn() && !hasImages && thread.length === 0) {
+  // answer for a brand-new screenshot. Also skip mid-conversation and on reply
+  // turns: those depend on live context a canned cache hit would ignore.
+  if (isMemoryOn() && !hasImages && thread.length === 0 && !msg.replyToText) {
     const cached = await lookupCache(msg.guildId, msg.text).catch(() => null);
     if (cached) {
       const ageMs = Date.now() - cached.cachedAt.getTime();
@@ -289,7 +289,8 @@ export async function answer(msg: NormalizedMessage, opts: AnswerOptions = {}): 
   // Skipped mid-thread (context-dependent) and on image turns. Guild-scoped, so
   // it never serves one trader's answer to another across communities.
   const qHash = questionHash(questionText);
-  const canExactCache = !hasImages && thread.length === 0 && Boolean(questionText.trim());
+  const canExactCache =
+    !hasImages && thread.length === 0 && !msg.replyToText && Boolean(questionText.trim());
   if (canExactCache) {
     const hit = await exactCacheGet(msg.guildId, qHash).catch(() => null);
     if (hit) {
@@ -351,7 +352,14 @@ export async function answer(msg: NormalizedMessage, opts: AnswerOptions = {}): 
     ? `\n[what you've learned about THIS trader over time — use it to tailor your read (their assets, style, timeframe, preferred depth/length) and to avoid what they reacted poorly to; NEVER mention that you keep a profile: ${profile}]`
     : '';
 
-  const header = `[server: ${msg.guildName ?? msg.guildId} · user: ${msg.userName ?? msg.userId} · utc: ${new Date().toISOString()}]${backdropLine}${profileLine}`;
+  // Replied-to message — the context "these"/"that" points at. May be YOUR own
+  // earlier answer (possibly to another trader in the channel); treat it as the
+  // live subject of this turn.
+  const replyLine = msg.replyToText
+    ? `\n[this message is a REPLY to ${msg.replyToBot ? 'YOUR earlier answer' : "another user's message"} in this chat — "these"/"that"/"it" refers to it. Quoted: """${msg.replyToText}"""]`
+    : '';
+
+  const header = `[server: ${msg.guildName ?? msg.guildId} · user: ${msg.userName ?? msg.userId} · utc: ${new Date().toISOString()}]${backdropLine}${profileLine}${replyLine}`;
   const userText = questionText.trim()
     ? `${header}\n\n${questionText}`
     : `${header}\n\n(No caption — read the attached chart(s): identify the asset and timeframe, then give your structural read.)`;

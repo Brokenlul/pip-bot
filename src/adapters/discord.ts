@@ -197,6 +197,13 @@ export class DiscordAdapter implements PlatformAdapter {
     const botId = this.client.user.id;
     const isDM = !message.inGuild();
     const mentioned = message.mentions.users.has(botId);
+
+    // Resolve the replied-to message (cache first, one REST fetch as fallback).
+    // Carrying its text is what lets "chart these levels" work when "these"
+    // lives in an earlier message — including one Pip gave a DIFFERENT user,
+    // which the per-user thread memory deliberately can't see.
+    const referenced = await this.resolveReference(message);
+    const replyToBot = referenced?.author?.id === botId;
     // Visibility for the DM path — if this never logs when you DM the bot, the
     // event isn't reaching us (Dev Portal "Message Content Intent" off, or the
     // user shares no guild / has DMs closed), not a bug in the code below.
@@ -207,8 +214,9 @@ export class DiscordAdapter implements PlatformAdapter {
         }`,
       );
     }
-    // In servers: only when @-mentioned. In DMs: always.
-    if (!isDM && !mentioned) return;
+    // In servers: when @-mentioned OR replying to one of Pip's answers
+    // (mirrors the Telegram adapter). In DMs: always.
+    if (!isDM && !mentioned && !replyToBot) return;
 
     const question = message.content
       .replace(new RegExp(`<@!?${botId}>`, 'g'), '')
@@ -216,6 +224,7 @@ export class DiscordAdapter implements PlatformAdapter {
       .slice(0, MAX_QUESTION_LEN);
 
     const images = await collectImages(message);
+    const replyToText = referenced ? extractMessageText(referenced, botId) : undefined;
 
     const msg: NormalizedMessage = {
       platform: 'discord',
@@ -226,6 +235,8 @@ export class DiscordAdapter implements PlatformAdapter {
       userName: message.author.username,
       text: question,
       images: images.length ? images : undefined,
+      replyToText,
+      replyToBot: replyToText ? replyToBot : undefined,
       receivedAt: new Date(),
     };
 
@@ -259,6 +270,19 @@ export class DiscordAdapter implements PlatformAdapter {
       await this.send(message, payload);
     } finally {
       clearInterval(typingTimer);
+    }
+  }
+
+  /** Fetch the message this one replies to — cache first, then one REST call. */
+  private async resolveReference(message: Message): Promise<Message | undefined> {
+    const refId = message.reference?.messageId;
+    if (!refId) return undefined;
+    const cached = message.channel.messages.cache.get(refId);
+    if (cached) return cached;
+    try {
+      return await message.fetchReference();
+    } catch {
+      return undefined; // deleted / not resolvable — proceed without it
     }
   }
 
@@ -322,6 +346,19 @@ async function collectImages(message: Message): Promise<NormalizedImage[]> {
     }
   }
   return out;
+}
+
+// Replied-to context is bounded — it rides inside the prompt on every turn.
+const MAX_REPLY_CONTEXT = 1500;
+
+/**
+ * Readable text of a message: Pip's own answers live in the embed description
+ * (content is empty on embed messages); user messages live in content.
+ */
+function extractMessageText(m: Message, botId: string): string | undefined {
+  const raw = (m.author?.id === botId ? m.embeds[0]?.description : undefined) ?? m.content ?? '';
+  const text = raw.trim();
+  return text ? text.slice(0, MAX_REPLY_CONTEXT) : undefined;
 }
 
 /** Detect the true image type from file magic bytes (not the declared MIME). */
