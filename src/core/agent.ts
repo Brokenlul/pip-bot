@@ -10,6 +10,7 @@ import {
 import {
   NormalizedMessage,
   NormalizedReply,
+  NormalizedAttachment,
   SourceCitation,
   AnswerOptions,
 } from '../adapters/platform.js';
@@ -26,6 +27,7 @@ import { ToolRegistry, ToolContext } from '../data/registry.js';
 import { cryptoPriceTool } from '../data/coingecko.js';
 import { fundingRateTool } from '../data/hyperliquid.js';
 import { whalePositionsTool } from '../data/hl-whales.js';
+import { priceChartTool } from '../data/chart-tool.js';
 import { fedCalendarTool } from '../data/fed-calendar.js';
 import { dexScreenerTool } from '../data/dexscreener.js';
 import { tokenScanTool } from '../data/token-scan.js';
@@ -148,6 +150,7 @@ Tools you have (prefer them over training data):
 - crypto_market_overview (DefiLlama + Fear & Greed) for the top-down backdrop: total DeFi TVL, biggest chains, total stablecoin supply (dry powder), 24h DEX volume + fees, and the Fear & Greed index. defi_protocol for a specific protocol's TVL / 1d-7d change / fees / revenue — the protocol's actual business, not just token price.
 - sec_filings for a US company's recent official filings (10-K/10-Q reports, 8-K material events, Form 4 insider trades) with dates + links — ground-truth events. financial_news (Finnhub, may be unavailable) for recent company or market/crypto news headlines. equity_financial_statements (FMP, may be unavailable) for full line-item income/balance/cash-flow statements over the last few periods.
 - crypto_perp_funding_and_oi (Hyperliquid) for funding / open interest / premium / mark price. Covers standard perps (BTC, ETH, SOL…) AND builder-deployed (HIP-3) markets — tokenized equities and thematic baskets like BOT, TSLA, NVDA, ROBOT, OPENAI. If a user asks "what is <name> on Hyperliquid" for something that isn't a normal coin, try this tool with the ticker — it auto-resolves the builder venue; if it returns data, the thing is a live Hyperliquid market and you can describe its mark/funding/OI.
+- render_price_chart to DRAW a chart and attach it to your reply as an image — you CAN render charts, never say you can't. Use it when a user asks to see something on a chart ("show me that on a chart", "chart it", "visualize those levels") or when the levels you're discussing land better as a picture. Pass the coin, the timeframe the conversation is about, and up to 6 levels (entry/stop/target/level, each with price + short label — e.g. the user's entry, the invalidation, the TP zone). Covers any Hyperliquid perp (BTC/ETH/SOL/HYPE/LINK… and builder markets like TSLA/BOT). The image attaches automatically — refer to it naturally ("chart attached — the $7.62 line is the retest zone") and keep the text short; the chart carries the levels. If a coin isn't on Hyperliquid, say you can't chart that one and give the read in text.
 - hyperliquid_whale_positions for what the biggest / most profitable traders on Hyperliquid are actually holding — live open positions with entry price, direction, size, unrealized PnL, leverage, and liquidation, plus long/short totals and weighted average entries. Use it for "whale entries", "whale uPnL", "are whales long or short X" on any standard Hyperliquid perp (HYPE included — this IS the way to read whales on HYPE); omit the coin for a cross-market view. Frame them as the venue's top realized-PnL leaderboard traders — never as verified "smart money", and never as a signal to copy their book.
 - macro_indicator (FRED) for the latest CPI/PCE/unemployment/GDP/yields numbers (may be unavailable if not configured).
 - next_fomc_meeting and next_cpi_release for macro event *dates*; macro_indicator for the actual figures.
@@ -177,6 +180,7 @@ function buildRegistry(): ToolRegistry {
     .register(cryptoPriceTool)
     .register(fundingRateTool)
     .register(whalePositionsTool)
+    .register(priceChartTool)
     .register(fedCalendarTool)
     .register(dexScreenerTool)
     .register(tokenScanTool)
@@ -310,7 +314,17 @@ export async function answer(msg: NormalizedMessage, opts: AnswerOptions = {}): 
 
   // 2. Agent loop with tools
   const registry = buildRegistry();
-  const ctx: ToolContext = { guildId: msg.guildId, userId: msg.userId };
+  // Charts rendered this turn ride back on the reply (max 2 — one HTF + LTF).
+  const attachments: NormalizedAttachment[] = [];
+  const ctx: ToolContext = {
+    guildId: msg.guildId,
+    userId: msg.userId,
+    attachImage: (filename, png) => {
+      if (attachments.length >= 2) return false;
+      attachments.push({ filename, mediaType: 'image/png', data: png });
+      return true;
+    },
+  };
   const citations: SourceCitation[] = [];
 
   // Registry tools (token_scan dropped when the user is over their scan cap) +
@@ -519,7 +533,7 @@ export async function answer(msg: NormalizedMessage, opts: AnswerOptions = {}): 
       : "I couldn't complete a grounded answer for that — a downstream tool kept failing. Try again in a moment.";
   }
 
-  const reply = buildReply({ body: finalText, sources: dedupe(citations) });
+  const reply = buildReply({ body: finalText, sources: dedupe(citations), attachments });
 
   // 3a. Usage + cost log — the source of truth for spend (runs whenever Supabase
   // is configured, beta or not, so the daily kill-switch and analytics have data).
@@ -540,7 +554,9 @@ export async function answer(msg: NormalizedMessage, opts: AnswerOptions = {}): 
   }).catch(() => {});
 
   // 3b. Store a clean answer in the free exact-match cache (standalone Q only).
-  if (canExactCache && finalText && !timedOut) {
+  // Skipped when a chart was attached — the cache stores text only, and a
+  // served hit saying "chart attached" with no image would read broken.
+  if (canExactCache && finalText && !timedOut && attachments.length === 0) {
     void exactCachePut(msg.guildId, qHash, finalText, reply.sources).catch(() => {});
   }
 

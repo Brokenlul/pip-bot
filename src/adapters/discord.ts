@@ -3,6 +3,7 @@ import {
   GatewayIntentBits,
   Partials,
   EmbedBuilder,
+  AttachmentBuilder,
   Events,
   Message,
   MessageReaction,
@@ -151,18 +152,25 @@ export class DiscordAdapter implements PlatformAdapter {
     };
   }
 
-  /** Shared: run the agent for a normalized message, returning a success or error embed. */
-  private async computeEmbed(
+  /** Shared: run the agent for a normalized message, returning a success or error payload. */
+  private async computePayload(
     msg: NormalizedMessage,
     question: string,
     opts: AnswerOptions,
-  ): Promise<EmbedBuilder> {
+  ): Promise<{ embeds: EmbedBuilder[]; files?: AttachmentBuilder[] }> {
     try {
       const reply = await this.handler!(msg, opts);
-      return toEmbed(reply, question);
+      const embed = toEmbed(reply, question);
+      // Rendered charts ride as attachments; the first one displays inside the
+      // branded embed (attachment:// reference), extras appear below it.
+      const files = (reply.attachments ?? []).map(
+        (a) => new AttachmentBuilder(a.data, { name: a.filename }),
+      );
+      if (files.length) embed.setImage(`attachment://${reply.attachments![0]!.filename}`);
+      return { embeds: [embed], files: files.length ? files : undefined };
     } catch (e) {
       console.error('[discord] answer failed:', e);
-      return errorEmbed(e as Error);
+      return { embeds: [errorEmbed(e as Error)] };
     }
   }
 
@@ -247,8 +255,8 @@ export class DiscordAdapter implements PlatformAdapter {
 
     try {
       const label = question || (images.length ? `[${images.length} chart image${images.length > 1 ? 's' : ''}]` : '');
-      const embed = await this.computeEmbed(msg, label, this.optsFrom(gate));
-      await this.send(message, { embeds: [embed] });
+      const payload = await this.computePayload(msg, label, this.optsFrom(gate));
+      await this.send(message, payload);
     } finally {
       clearInterval(typingTimer);
     }
@@ -262,7 +270,7 @@ export class DiscordAdapter implements PlatformAdapter {
    */
   private async send(
     message: Message,
-    payload: string | { embeds: EmbedBuilder[] },
+    payload: string | { embeds: EmbedBuilder[]; files?: AttachmentBuilder[] },
   ): Promise<void> {
     try {
       await message.reply(payload);

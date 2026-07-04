@@ -3,6 +3,11 @@ import { z } from 'zod';
 export interface ToolContext {
   guildId: string;
   userId: string;
+  /**
+   * Attach a rendered image (PNG) to the outgoing reply — used by chart tools.
+   * Returns false when the per-reply attachment budget is spent.
+   */
+  attachImage?: (filename: string, png: Buffer) => boolean;
 }
 
 /** Shape Anthropic expects for tool input schemas. */

@@ -107,6 +107,20 @@ function matchBuilderMarket(markets: BuilderMarket[], want: string): BuilderMark
   return matches.reduce((a, b) => (Number(b.ctx.openInterest) > Number(a.ctx.openInterest) ? b : a));
 }
 
+/**
+ * Resolve a user-typed ticker to the exact Hyperliquid coin name — standard
+ * universe first (case matters: "kPEPE" not "KPEPE"), then builder (HIP-3)
+ * markets ("xyz:BOT"). Used by the candle/chart tool.
+ */
+export async function resolveCoinName(ticker: string): Promise<string | undefined> {
+  const want = ticker.trim().toUpperCase().replace(/^\$/, '');
+  const meta = await fetchMeta();
+  const std = meta.universe.find((u) => u.name.toUpperCase() === want);
+  if (std) return std.name;
+  const builder = matchBuilderMarket(await allBuilderMarkets(), want);
+  return builder?.name;
+}
+
 function toOutput(name: string, ctx: AssetCtx): Output {
   const fundingHourly = Number(ctx.funding);
   return {

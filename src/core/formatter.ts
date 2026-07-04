@@ -1,4 +1,4 @@
-import { NormalizedReply, SourceCitation } from '../adapters/platform.js';
+import { NormalizedReply, NormalizedAttachment, SourceCitation } from '../adapters/platform.js';
 import { fmtUtcHm } from './util.js';
 
 const DEFAULT_DISCLAIMER = 'Not financial advice.';
@@ -9,6 +9,7 @@ export function buildReply(opts: {
   title?: string;
   asOf?: Date;
   disclaimer?: string;
+  attachments?: NormalizedAttachment[];
 }): NormalizedReply {
   return {
     title: opts.title,
@@ -16,6 +17,7 @@ export function buildReply(opts: {
     sources: opts.sources ?? [],
     asOf: opts.asOf ?? new Date(),
     disclaimer: opts.disclaimer ?? DEFAULT_DISCLAIMER,
+    attachments: opts.attachments?.length ? opts.attachments : undefined,
   };
 }
 

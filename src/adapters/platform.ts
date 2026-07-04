@@ -35,12 +35,20 @@ export interface SourceCitation {
   url?: string;
 }
 
+/** An image Pip rendered itself (branded charts) — attached to the reply. */
+export interface NormalizedAttachment {
+  filename: string;
+  mediaType: 'image/png';
+  data: Buffer;
+}
+
 export interface NormalizedReply {
   title?: string;
   body: string;
   sources: SourceCitation[];
   asOf: Date;
   disclaimer?: string;
+  attachments?: NormalizedAttachment[];
 }
 
 export type MessageHandler = (

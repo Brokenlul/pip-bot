@@ -1,4 +1,4 @@
-import { Bot, Context, GrammyError } from 'grammy';
+import { Bot, Context, GrammyError, InputFile } from 'grammy';
 import type { Message, PhotoSize } from 'grammy/types';
 import { getConfig } from '../config.js';
 import {
@@ -167,6 +167,13 @@ export class TelegramAdapter implements PlatformAdapter {
         return;
       }
       await this.send(ctx, toHtml(reply), { html: true });
+      // Rendered charts follow the text as photos. Best-effort — a failed
+      // photo upload must never eat the answer that already went out.
+      for (const att of reply.attachments ?? []) {
+        await ctx
+          .replyWithPhoto(new InputFile(att.data, att.filename))
+          .catch((e) => console.warn(`[telegram] chart send failed: ${(e as Error).message}`));
+      }
     } finally {
       clearInterval(typingTimer);
     }
