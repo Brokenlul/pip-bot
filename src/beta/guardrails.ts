@@ -152,6 +152,24 @@ async function isTester(platform: string, platformId: string): Promise<boolean> 
   return (data?.length ?? 0) > 0;
 }
 
+/** First-touch enrollment from an allowlisted server. Idempotent (PK upsert). */
+async function autoEnroll(platform: string, platformId: string, name?: string): Promise<boolean> {
+  const db = getDb();
+  if (!db) return false;
+  const { error } = await db
+    .from('beta_testers')
+    .upsert(
+      { platform, platform_id: platformId, name: name ?? 'auto' },
+      { onConflict: 'platform,platform_id', ignoreDuplicates: true },
+    );
+  if (error) {
+    console.warn(`[beta] autoEnroll: ${error.message}`);
+    return false;
+  }
+  console.log(`[beta] auto-enrolled ${platform}:${platformId} (${name ?? 'auto'}) via allowlisted server`);
+  return true;
+}
+
 // ---- Free exact-match answer cache ----------------------------------------
 
 export async function exactCacheGet(
@@ -266,8 +284,15 @@ export async function betaGate(msg: NormalizedMessage): Promise<GateDecision> {
     }
   }
 
-  // 1. Allowlist — the strongest guardrail.
-  const tester = await isTester(msg.platform, msg.userId);
+  // 1. Allowlist — the strongest guardrail. Anyone who reaches Pip inside an
+  //    EXPLICITLY allowlisted server is auto-enrolled: the server invite is the
+  //    trust boundary there, and per-user caps still bound every new enrollee.
+  //    (No auto-enroll when BETA_ALLOWED_GUILDS is empty — that list being set
+  //    is what makes the server a closed room.)
+  let tester = await isTester(msg.platform, msg.userId);
+  if (!tester && !msg.guildId.startsWith('dm:') && csvSet(cfg.BETA_ALLOWED_GUILDS).has(msg.guildId)) {
+    tester = await autoEnroll(msg.platform, msg.userId, msg.userName);
+  }
   if (!tester) {
     const day = dayStartUtc().toISOString().slice(0, 10);
     const key = `${day}:${userKey}`;

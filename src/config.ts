@@ -47,7 +47,12 @@ const Schema = z
     SEMANTIC_CACHE_TTL_SECONDS: z.coerce.number().int().positive().default(600),
 
     // ---- Private-beta guardrails (all optional; layer is inert unless BETA_MODE=true) ----
-    BETA_MODE: z.coerce.boolean().default(false),
+    // Strict parse: z.coerce.boolean() would treat ANY non-empty string —
+    // including the literal "false" — as true. Only "true"/"1" enable it.
+    BETA_MODE: z
+      .string()
+      .default('false')
+      .transform((v) => ['true', '1'].includes(v.trim().toLowerCase())),
     // ISO timestamp; after it Pip stops serving and posts a wrap-up. Optional.
     BETA_ENDS_AT: z.string().optional(),
     // Discord user id to DM on spend alerts (50/80/100%). Optional.
