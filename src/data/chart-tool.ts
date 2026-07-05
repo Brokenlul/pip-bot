@@ -2,12 +2,22 @@ import { z } from 'zod';
 import { Tool, zValidator } from './registry.js';
 import { makeCache, withRetry } from '../core/util.js';
 import { hlInfo, resolveCoinName } from './hyperliquid.js';
-import { renderCandleChartPng, Candle, ChartLevel } from '../core/candle-chart.js';
+import {
+  renderCandleChartPng,
+  Candle,
+  ChartLevel,
+  ChartSpec,
+  OverlayLine,
+  ChartZone,
+  SubPane,
+} from '../core/candle-chart.js';
+import { sma, ema, rsi, macd, vwap, bollinger, fvgZones, Series } from '../core/indicators.js';
 
 /**
  * render_price_chart — draws a Pip-branded candlestick chart (Hyperliquid
- * candles, rendered locally, zero cost) and attaches the PNG to the reply via
- * ToolContext.attachImage. The model gets a small JSON summary back; the image
+ * candles, rendered locally, zero cost) with optional levels and indicators,
+ * and attaches the PNG to the reply via ToolContext.attachImage. The model
+ * gets a JSON summary (including current indicator values) back; the image
  * itself rides on the NormalizedReply.
  */
 
@@ -20,7 +30,37 @@ const INTERVAL_MS: Record<Interval, number> = {
   '4h': 4 * 3_600_000,
   '1d': 24 * 3_600_000,
 };
-const CANDLE_COUNT = 120;
+// 120 candles shown; extra history fetched so EMA200/MACD/RSI are already
+// warmed up at the left edge of the visible window.
+const DISPLAY_COUNT = 120;
+const WARMUP_COUNT = 220;
+
+const INDICATORS = [
+  'ema20',
+  'ema50',
+  'ema100',
+  'ema200',
+  'sma20',
+  'sma50',
+  'vwap',
+  'bollinger',
+  'macd',
+  'rsi',
+  'fvg',
+] as const;
+type Indicator = (typeof INDICATORS)[number];
+
+// Overlay palette — distinct from the level colors (entry white / stop clay /
+// target green / level blue) so lines stay tellable-apart.
+const OVERLAY_COLOR: Record<string, string> = {
+  ema20: '#E8C15A',
+  ema50: '#7E93FF',
+  ema100: '#C77DFF',
+  ema200: '#F2F4F1',
+  sma20: '#5AC8E8',
+  sma50: '#FF8FB1',
+  vwap: '#5AC8E8',
+};
 
 const LevelSchema = z.object({
   price: z.number().positive(),
@@ -36,6 +76,11 @@ const InputSchema = z.object({
     .max(6)
     .optional()
     .describe('Horizontal levels to mark: entry / stop / target / plain level, each with a price and short label.'),
+  indicators: z
+    .array(z.enum(INDICATORS))
+    .max(5)
+    .optional()
+    .describe('Indicators to draw: EMA/SMA overlays, vwap, bollinger, macd, rsi (sub-panes), fvg (fair value gap zones).'),
 });
 type Input = z.infer<typeof InputSchema>;
 
@@ -51,6 +96,9 @@ interface Output {
   window_change_pct: number;
   levels_drawn: number;
   levels_skipped: string[];
+  indicators_drawn: string[];
+  /** Current values of what was drawn — reference these in the answer. */
+  indicator_readout: Record<string, string>;
   source_url: string;
 }
 
@@ -69,21 +117,109 @@ async function fetchCandles(coin: string, interval: Interval): Promise<Candle[]>
   const key = `${coin}:${interval}`;
   return candleCache.wrap(key, async () => {
     const end = Date.now();
-    const start = end - INTERVAL_MS[interval] * (CANDLE_COUNT + 2);
+    const start = end - INTERVAL_MS[interval] * (DISPLAY_COUNT + WARMUP_COUNT + 2);
     const raw = await hlInfo<RawCandle[]>({
       type: 'candleSnapshot',
       req: { coin, interval, startTime: start, endTime: end },
     });
     return (raw ?? [])
       .map((r) => ({ t: r.t, o: Number(r.o), h: Number(r.h), l: Number(r.l), c: Number(r.c), v: Number(r.v) }))
-      .slice(-CANDLE_COUNT);
+      .slice(-(DISPLAY_COUNT + WARMUP_COUNT));
   });
+}
+
+const fmtV = (v: number | null | undefined): string =>
+  v == null ? 'n/a' : parseFloat(v.toPrecision(5)).toString();
+
+/** Compute the requested indicators over full history, sliced to the window. */
+function buildIndicators(
+  all: Candle[],
+  windowCandles: Candle[],
+  wanted: Indicator[],
+): { overlays: OverlayLine[]; band: ChartSpec['band']; zones: ChartZone[]; subPanes: SubPane[]; readout: Record<string, string> } {
+  const offset = all.length - windowCandles.length;
+  const cut = (s: Series) => s.slice(offset);
+  const closes = all.map((c) => c.c);
+  const overlays: OverlayLine[] = [];
+  const subPanes: SubPane[] = [];
+  const zones: ChartZone[] = [];
+  let band: ChartSpec['band'];
+  const readout: Record<string, string> = {};
+  const lastOf = (s: Series) => [...s].reverse().find((v) => v != null) ?? null;
+
+  for (const ind of wanted) {
+    if (/^(ema|sma)\d+$/.test(ind)) {
+      const period = Number(ind.slice(3));
+      const series = ind.startsWith('ema') ? ema(closes, period) : sma(closes, period);
+      overlays.push({ label: ind.toUpperCase(), color: OVERLAY_COLOR[ind]!, points: cut(series) });
+      readout[ind] = fmtV(lastOf(series));
+    } else if (ind === 'vwap') {
+      // Anchored at the visible window's open, not the warm-up start.
+      const series = vwap(windowCandles);
+      overlays.push({ label: 'VWAP', color: OVERLAY_COLOR.vwap!, points: series, dashed: true });
+      readout.vwap = `${fmtV(lastOf(series))} (anchored at window open)`;
+    } else if (ind === 'bollinger') {
+      const bb = bollinger(closes);
+      band = { label: 'BB(20,2)', color: '#8FA398', upper: cut(bb.upper), lower: cut(bb.lower) };
+      overlays.push({ label: 'BB mid', color: '#8FA398', points: cut(bb.mid), dashed: true });
+      readout.bollinger = `upper ${fmtV(lastOf(bb.upper))} · mid ${fmtV(lastOf(bb.mid))} · lower ${fmtV(lastOf(bb.lower))}`;
+    } else if (ind === 'macd') {
+      const m = macd(closes);
+      const histWin = cut(m.hist);
+      subPanes.push({
+        title: 'MACD (12,26,9)',
+        series: [
+          { label: 'MACD', color: '#5AC8E8', points: cut(m.macd) },
+          { label: 'signal', color: '#E8C15A', points: cut(m.signal) },
+        ],
+        histogram: { points: histWin, posColor: '#12A15A', negColor: '#C25B37' },
+        guides: [0],
+      });
+      const hLast = lastOf(m.hist);
+      const hPrev = [...m.hist].filter((v) => v != null).slice(-4, -1);
+      const trend =
+        hLast != null && hPrev.length >= 2
+          ? Math.abs(hLast) > Math.abs(hPrev[hPrev.length - 1]!)
+            ? 'expanding'
+            : 'contracting'
+          : 'n/a';
+      readout.macd = `macd ${fmtV(lastOf(m.macd))} · signal ${fmtV(lastOf(m.signal))} · histogram ${fmtV(hLast)} (${hLast != null && hLast >= 0 ? 'positive' : 'negative'}, ${trend})`;
+    } else if (ind === 'rsi') {
+      const series = rsi(closes);
+      subPanes.push({
+        title: 'RSI (14)',
+        series: [{ label: 'RSI', color: '#C77DFF', points: cut(series) }],
+        yDomain: [0, 100],
+        guides: [30, 70],
+      });
+      readout.rsi = fmtV(lastOf(series));
+    } else if (ind === 'fvg') {
+      const unfilled = fvgZones(all)
+        .filter((zn) => !zn.filled && zn.index >= offset - 40) // recent, still-open gaps
+        .slice(-5);
+      for (const zn of unfilled) {
+        zones.push({
+          top: zn.top,
+          bottom: zn.bottom,
+          fromIndex: Math.max(0, zn.index - offset),
+          color: zn.bullish ? '#12A15A' : '#C25B37',
+          label: `FVG${zn.bullish ? ' ↑' : ' ↓'}`,
+        });
+      }
+      readout.fvg = unfilled.length
+        ? unfilled
+            .map((zn) => `${zn.bullish ? 'bullish' : 'bearish'} ${fmtV(zn.bottom)}–${fmtV(zn.top)}`)
+            .join('; ')
+        : 'no unfilled fair value gaps in the visible window';
+    }
+  }
+  return { overlays, band, zones, subPanes, readout };
 }
 
 export const priceChartTool: Tool<Input, Output> = {
   name: 'render_price_chart',
   description:
-    'Draw a branded candlestick chart image (Hyperliquid candles: any standard perp like BTC/ETH/SOL/HYPE/LINK, plus builder markets like TSLA/BOT) and ATTACH it to your reply automatically. Optionally mark up to 6 horizontal levels — entry / stop / target / plain level — each with a price and short label. Use it whenever a user asks to SEE something on a chart ("show me on a chart", "can you chart that", "visualize these levels") or when a picture of the levels you are discussing would land better than prose. The image is attached for you; just refer to it naturally ("chart attached — the $7.62 line is the retest zone"). You CAN render charts — never claim you cannot.',
+    'Draw a branded candlestick chart image (Hyperliquid candles: any standard perp like BTC/ETH/SOL/HYPE/LINK, plus builder markets like TSLA/BOT) and ATTACH it to your reply automatically. Options: up to 6 horizontal levels (entry / stop / target / level, each with price + short label) AND indicators — ema20/ema50/ema100/ema200, sma20/sma50, vwap, bollinger, macd, rsi (drawn as sub-panes), fvg (unfilled fair-value-gap zones, the objective SMC building block). Use it whenever a user asks to SEE something on a chart or asks for an indicator ("use MACD", "add RSI", "show the EMAs", "mark the FVGs"). The tool result includes indicator_readout with the current values — weave those numbers into your answer. You CAN render charts with indicators — never claim you cannot. What you cannot do: annotate someone else\'s screenshot or replicate a proprietary paid indicator suite (e.g. full LuxAlgo SMC labels) — offer the closest of your own instead.',
   inputSchema: {
     type: 'object',
     properties: {
@@ -111,6 +247,13 @@ export const priceChartTool: Tool<Input, Output> = {
           required: ['price'],
         },
       },
+      indicators: {
+        type: 'array',
+        maxItems: 5,
+        items: { type: 'string', enum: [...INDICATORS] },
+        description:
+          'Indicators to draw. Overlays: ema20/ema50/ema100/ema200, sma20/sma50, vwap, bollinger. Sub-panes: macd, rsi. Zones: fvg (unfilled fair value gaps).',
+      },
     },
     required: ['coin'],
   },
@@ -121,8 +264,9 @@ export const priceChartTool: Tool<Input, Output> = {
         const interval = input.interval ?? '1h';
         const coin = await resolveCoinName(input.coin);
         if (!coin) throw new Error(`Coin "${input.coin}" not found on Hyperliquid — confirm the ticker.`);
-        const candles = await fetchCandles(coin, interval);
-        if (candles.length < 2) throw new Error(`No candle data for ${coin} on ${interval}.`);
+        const all = await fetchCandles(coin, interval);
+        if (all.length < 2) throw new Error(`No candle data for ${coin} on ${interval}.`);
+        const candles = all.slice(-DISPLAY_COUNT);
 
         const lo = Math.min(...candles.map((c) => c.l));
         const hi = Math.max(...candles.map((c) => c.h));
@@ -135,11 +279,18 @@ export const priceChartTool: Tool<Input, Output> = {
           else skipped.push(`${lv.label ?? 'level'} @ ${lv.price} (outside the visible ${interval} window)`);
         }
 
+        const wanted = [...new Set(input.indicators ?? [])];
+        const { overlays, band, zones, subPanes, readout } = buildIndicators(all, candles, wanted);
+
         const png = renderCandleChartPng({
           title: `${coin} · ${interval.toUpperCase()}`,
           subtitle: 'perp · last 120 candles',
           candles,
           levels,
+          overlays,
+          band,
+          zones,
+          subPanes,
         });
         const filename = `pip-chart-${coin.toLowerCase().replace(/[^a-z0-9]+/g, '-')}-${interval}.png`;
         const attached = ctx.attachImage?.(filename, png) ?? false;
@@ -150,7 +301,7 @@ export const priceChartTool: Tool<Input, Output> = {
         return {
           chart_attached: true,
           coin,
-          interval: interval,
+          interval,
           candles: candles.length,
           window_start_utc: new Date(first.t).toISOString(),
           last_close: last.c,
@@ -159,6 +310,8 @@ export const priceChartTool: Tool<Input, Output> = {
           window_change_pct: Number((((last.c - first.o) / first.o) * 100).toFixed(2)),
           levels_drawn: levels.length,
           levels_skipped: skipped,
+          indicators_drawn: wanted,
+          indicator_readout: readout,
           source_url: `https://app.hyperliquid.xyz/trade/${coin}`,
         };
       },
