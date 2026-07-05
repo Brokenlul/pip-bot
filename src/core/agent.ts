@@ -143,7 +143,7 @@ Equities, fundamentals & earnings (you are an all-rounder — stocks are in scop
 - Predicting an upcoming earnings print: pull equity_earnings (consensus EPS/revenue estimate, the recent beat/miss pattern, the next date) and equity_fundamentals (growth and margin trajectory), then reason to an EXPECTATION — likely direction vs. consensus, a rough range, and the swing factors (guidance, a margin inflection, demand signal). Frame it as analysis with explicit uncertainty and confidence, never a certainty or a trade instruction. Say what would confirm or break the call. You do NOT have the earnings-call transcript or official guidance text yet — don't invent management quotes; if that qualitative layer would change the read, say so.
 - Same discipline as everywhere: describe state, scenarios, and what would change your mind. Analysis of whether results are constructive or negative for a name is fine; telling someone to buy or sell it is not.
 
-Tools you have (prefer them over training data):
+Tools you have (prefer them over training data). A trader is waiting on you — when you need multiple lookups, request them ALL AT ONCE in a single turn (parallel tool calls), not one at a time across turns; only sequence a call when its input genuinely depends on a prior result. Decide the full set of data you need up front, fetch it in one batch, then answer.
 - web_search — search the live web. Reach for it whenever a question turns on a current fact your other tools don't cover, or to VERIFY a claim (yours or the user's) instead of guessing: breaking news and why something moved, a recent announcement/partnership/hack/listing, a date or event, an unfamiliar project or person, a figure you're unsure of. Prefer searching over answering from memory when the answer could have changed or you're not certain. Weave the findings in as your own understanding — don't narrate that you searched; you may attribute a hard fact to its primary source when the source IS the substance (e.g. "the SEC filing shows…", "Powell said…").
 - crypto_price (CoinGecko) for listed spot prices; dex_token_lookup (DexScreener) for a newer/smaller token by symbol or name CoinGecko doesn't know.
 - equity_snapshot / equity_fundamentals / equity_earnings (Finnhub, may be unavailable if not configured) for LISTED STOCKS: snapshot = price/market cap/52w/P-E/P-S; fundamentals = revenue & EPS growth, margins, ROE, debt, valuation multiples; earnings = next earnings date, consensus EPS/revenue estimate, recent beat/miss history, and analyst recommendation split. Use these for any company/ticker question and to predict an upcoming print.
@@ -241,13 +241,15 @@ export async function answer(msg: NormalizedMessage, opts: AnswerOptions = {}): 
   // Beta bounds the question length to cap input tokens.
   const questionText = beta ? (msg.text ?? '').slice(0, CAPS.perUser.maxQuestionLen) : msg.text ?? '';
 
-  // Side-effects that should not block the answer if they fail
-  await ensureGuild(msg.guildId, msg.guildName).catch((e) =>
-    console.warn(`[memory] ensureGuild: ${(e as Error).message}`),
-  );
-  incrementUsage(msg.guildId).catch((e) =>
-    console.warn(`[memory] incrementUsage: ${(e as Error).message}`),
-  );
+  // Side-effects that must not block or delay the answer. incrementUsage
+  // waits for the guild upsert (FK ordering) but the reply waits for neither.
+  void ensureGuild(msg.guildId, msg.guildName)
+    .catch((e) => console.warn(`[memory] ensureGuild: ${(e as Error).message}`))
+    .then(() =>
+      incrementUsage(msg.guildId).catch((e) =>
+        console.warn(`[memory] incrementUsage: ${(e as Error).message}`),
+      ),
+    );
 
   const hadImages = Boolean(msg.images?.length);
   const hasImages = allowVision && hadImages;
@@ -257,6 +259,16 @@ export async function answer(msg: NormalizedMessage, opts: AnswerOptions = {}): 
       body: "You've hit today's chart-read limit — resets at midnight UTC. Ask me anything in text meanwhile 🌱",
     });
   }
+
+  // Context fetches kicked off in PARALLEL — serially these Supabase/API round
+  // trips added ~1-2s before the model was even called. Thread is awaited here
+  // (it gates the cache); backdrop/profile are awaited at header-build time.
+  const backdropPromise: Promise<string | null> = companionApiEnabled()
+    ? marketBackdrop().catch(() => null)
+    : Promise.resolve(null);
+  const profilePromise: Promise<string | null> = isMemoryOn()
+    ? getProfile(msg.guildId, msg.userId).catch(() => null)
+    : Promise.resolve(null);
 
   // Recent conversation for THIS user in THIS chat — the context that makes
   // follow-ups ("smart money in this?", "what about now?") resolvable. Fetched
@@ -341,14 +353,14 @@ export async function answer(msg: NormalizedMessage, opts: AnswerOptions = {}): 
 
   // Ambient market backdrop — Pip's own current regime + read, so it always
   // answers with awareness of the tape. Cached, fail-null; never blocks a reply.
-  const backdrop = companionApiEnabled() ? await marketBackdrop() : null;
+  const backdrop = await backdropPromise;
   const backdropLine = backdrop
     ? `\n[market backdrop — this is YOUR own current read of the tape; weave it in naturally, never attribute it to a source: ${backdrop}]`
     : '';
 
   // Learned per-trader profile — what Pip knows about THIS user, so it tailors
   // asset focus, depth, framing, and length (and avoids what they disliked).
-  const profile = isMemoryOn() ? await getProfile(msg.guildId, msg.userId).catch(() => null) : null;
+  const profile = await profilePromise;
   const profileLine = profile
     ? `\n[what you've learned about THIS trader over time — use it to tailor your read (their assets, style, timeframe, preferred depth/length) and to avoid what they reacted poorly to; NEVER mention that you keep a profile: ${profile}]`
     : '';
@@ -490,50 +502,55 @@ export async function answer(msg: NormalizedMessage, opts: AnswerOptions = {}): 
       break;
     }
 
-    const toolResults: Anthropic.Messages.ToolResultBlockParam[] = [];
-    for (const block of resp.content) {
-      if (block.type !== 'tool_use') continue;
-      toolCallCount++;
-      toolsUsed.add(block.name);
-      // Per-user scan cap: token_scan is dropped from the tool set when over
-      // budget, but guard execution too in case the model calls it anyway.
-      if (!allowScan && block.name === 'token_scan') {
-        toolResults.push({
-          type: 'tool_result',
-          tool_use_id: block.id,
-          is_error: true,
-          content: "You've hit today's token-scan limit — resets at midnight UTC.",
-        });
-        continue;
-      }
-      const tool = registry.get(block.name);
-      if (!tool) {
-        toolResults.push({
-          type: 'tool_result',
-          tool_use_id: block.id,
-          is_error: true,
-          content: `Unknown tool: ${block.name}`,
-        });
-        continue;
-      }
-      try {
-        const input = tool.validate(block.input);
-        const out = await tool.execute(input, ctx);
-        citations.push(tool.citation(input, out));
-        toolResults.push({
-          type: 'tool_result',
-          tool_use_id: block.id,
-          content: JSON.stringify(out),
-        });
-      } catch (e) {
-        toolResults.push({
-          type: 'tool_result',
-          tool_use_id: block.id,
-          is_error: true,
-          content: `Tool ${block.name} failed: ${(e as Error).message}`,
-        });
-      }
-    }
+    // Execute the step's tool calls in PARALLEL — the model often asks for
+    // 2-3 lookups at once, and awaiting them one-by-one added their latencies
+    // end-to-end (a measured ~5-8s per extra call at p95). Results keep the
+    // model's call order via Promise.all.
+    const toolUses = resp.content.filter(
+      (b): b is Anthropic.Messages.ToolUseBlock => b.type === 'tool_use',
+    );
+    const toolResults: Anthropic.Messages.ToolResultBlockParam[] = await Promise.all(
+      toolUses.map(async (block) => {
+        toolCallCount++;
+        toolsUsed.add(block.name);
+        // Per-user scan cap: token_scan is dropped from the tool set when over
+        // budget, but guard execution too in case the model calls it anyway.
+        if (!allowScan && block.name === 'token_scan') {
+          return {
+            type: 'tool_result' as const,
+            tool_use_id: block.id,
+            is_error: true,
+            content: "You've hit today's token-scan limit — resets at midnight UTC.",
+          };
+        }
+        const tool = registry.get(block.name);
+        if (!tool) {
+          return {
+            type: 'tool_result' as const,
+            tool_use_id: block.id,
+            is_error: true,
+            content: `Unknown tool: ${block.name}`,
+          };
+        }
+        try {
+          const input = tool.validate(block.input);
+          const out = await tool.execute(input, ctx);
+          citations.push(tool.citation(input, out));
+          return {
+            type: 'tool_result' as const,
+            tool_use_id: block.id,
+            content: JSON.stringify(out),
+          };
+        } catch (e) {
+          return {
+            type: 'tool_result' as const,
+            tool_use_id: block.id,
+            is_error: true,
+            content: `Tool ${block.name} failed: ${(e as Error).message}`,
+          };
+        }
+      }),
+    );
     messages.push({ role: 'user', content: toolResults });
   }
 
