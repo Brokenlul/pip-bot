@@ -18,6 +18,23 @@ const TG_RATING: Record<string, 'up' | 'down'> = {
 
 const MAX_QUESTION_LEN = 1000;
 
+// Static first-touch welcome for /start — sent before the beta gate (zero LLM
+// cost, so it's safe to greet anyone) so it never consumes the cooldown slot.
+const WELCOME = [
+  "Hey — I'm Pip 🌱 an AI markets analyst.",
+  '',
+  'I read markets the way a trader does: live funding and open interest, spot prices, macro (FOMC/CPI), token security scans, equities fundamentals — fused into one honest, two-sided read.',
+  '',
+  'Try me:',
+  "• what's BTC funding right now?",
+  '• next CPI print?',
+  '• scan <contract address>',
+  '• show me SOL on the 4h with RSI',
+  "• drop a chart screenshot and I'll read it",
+  '',
+  "Got a trade thesis? Tell me your entry, timeframe, and invalidation — I'll stress-test it against live data. I never give buy/sell calls; the trade is always yours. Not financial advice.",
+].join('\n');
+
 // Telegram caps a single message at 4096 chars; leave headroom for safety.
 const TG_MAX_MESSAGE = 4000;
 
@@ -112,6 +129,13 @@ export class TelegramAdapter implements PlatformAdapter {
 
     // In groups: only when @-mentioned or replied to. In DMs: always.
     if (!isDM && !mentioned) return;
+
+    // /start = Telegram's universal opener (also fired by deep links with a
+    // payload). Greet with who Pip is and how to use it — no model call.
+    if (isDM && /^\/start(\s|$)/.test(rawText)) {
+      await this.send(ctx, WELCOME);
+      return;
+    }
 
     const question = stripMention(rawText, botUsername).slice(0, MAX_QUESTION_LEN);
     const images = await this.collectImages(ctx);

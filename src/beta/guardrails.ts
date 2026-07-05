@@ -152,6 +152,32 @@ async function isTester(platform: string, platformId: string): Promise<boolean> 
   return (data?.length ?? 0) > 0;
 }
 
+/**
+ * Telegram invites are added by @handle (the numeric id is unknowable until the
+ * person messages the bot). If this user's handle matches a pending `@handle`
+ * row, claim it: rekey the row to their numeric id so every later check hits
+ * the fast platform_id path.
+ */
+async function claimHandleInvite(msg: NormalizedMessage): Promise<boolean> {
+  if (msg.platform !== 'telegram' || !msg.userName) return false;
+  const db = getDb();
+  if (!db) return false;
+  const handle = `@${msg.userName.toLowerCase()}`;
+  const { data, error } = await db
+    .from('beta_testers')
+    .update({ platform_id: msg.userId, name: msg.userName })
+    .eq('platform', 'telegram')
+    .eq('platform_id', handle)
+    .select('platform_id');
+  if (error) {
+    console.warn(`[beta] claimHandleInvite: ${error.message}`);
+    return false;
+  }
+  const claimed = (data?.length ?? 0) > 0;
+  if (claimed) console.log(`[beta] telegram ${handle} claimed by id ${msg.userId}`);
+  return claimed;
+}
+
 /** First-touch enrollment from an allowlisted server. Idempotent (PK upsert). */
 async function autoEnroll(platform: string, platformId: string, name?: string): Promise<boolean> {
   const db = getDb();
@@ -290,6 +316,7 @@ export async function betaGate(msg: NormalizedMessage): Promise<GateDecision> {
   //    (No auto-enroll when BETA_ALLOWED_GUILDS is empty — that list being set
   //    is what makes the server a closed room.)
   let tester = await isTester(msg.platform, msg.userId);
+  if (!tester) tester = await claimHandleInvite(msg);
   if (!tester && !msg.guildId.startsWith('dm:') && csvSet(cfg.BETA_ALLOWED_GUILDS).has(msg.guildId)) {
     tester = await autoEnroll(msg.platform, msg.userId, msg.userName);
   }
