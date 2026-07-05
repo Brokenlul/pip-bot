@@ -49,7 +49,7 @@ module.exports = async function handler(req, res) {
   let rows = [], testers = [], feedback = [];
   try {
     rows = await sb(url, key, `usage_log?select=created_at,platform,user_id,guild_id,cost_usd,tools_used,had_vision,web_searches,degraded,cache_hit,latency_ms,failed&created_at=gte.${weekAgo}&order=created_at.desc&limit=50000`);
-    testers = await sb(url, key, `beta_testers?select=platform,platform_id`);
+    testers = await sb(url, key, `beta_testers?select=platform,platform_id,name`);
     feedback = await sb(url, key, `feedback?select=platform,rater_id,rating&created_at=gte.${weekAgo}`);
   } catch (e) {
     // Log the real cause server-side; don't render Supabase/Postgres error text
@@ -83,6 +83,8 @@ function metrics(rows, testers, feedback) {
   const now = new Date();
   const dayStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate())).toISOString();
   const testerSet = new Set(testers.map((t) => `${t.platform}:${t.platform_id}`));
+  // Display names from the allowlist (auto-enroll stores the platform username).
+  const nameOf = new Map(testers.filter((t) => t.name).map((t) => [`${t.platform}:${t.platform_id}`, t.name]));
   const roleOf = (r) => { const k = `${r.platform}:${r.user_id}`; return isFounder(k) ? 'founder' : testerSet.has(k) ? 'tester' : 'guest'; };
   for (const r of rows) r._role = roleOf(r);
 
@@ -153,7 +155,11 @@ function metrics(rows, testers, feedback) {
   // per-user table (today), with role
   const byUserToday = new Map();
   for (const r of today) {
-    const u = byUserToday.get(`${r.platform}:${r.user_id}`) || { id: r.user_id, role: r._role, msgs: 0, spend: 0, searches: 0, scans: 0, vision: 0 };
+    const u = byUserToday.get(`${r.platform}:${r.user_id}`) || {
+      id: r.user_id,
+      name: nameOf.get(`${r.platform}:${r.user_id}`) || null,
+      role: r._role, msgs: 0, spend: 0, searches: 0, scans: 0, vision: 0,
+    };
     u.msgs++; u.spend += Number(r.cost_usd) || 0; u.searches += Number(r.web_searches) || 0;
     u.scans += (r.tools_used || []).includes('token_scan') ? 1 : 0; u.vision += r.had_vision ? 1 : 0;
     byUserToday.set(`${r.platform}:${r.user_id}`, u);
@@ -222,7 +228,7 @@ function render(m) {
   ].map((r) => `<tr><td class="mono">${r[0]}</td><td>${r[1]}</td><td class="muted">${r[2]}</td><td class="muted">${r[3]}</td></tr>`).join('');
 
   const userRows = m.usersToday.length
-    ? m.usersToday.map((u) => `<tr><td class="mono">${esc(u.id)}</td><td>${roleTag(u.role)}</td><td>${u.msgs}</td><td>${usd4(u.spend)}</td><td>${u.searches}</td><td>${u.scans}</td><td>${u.vision}</td></tr>`).join('')
+    ? m.usersToday.map((u) => `<tr><td class="mono" title="${esc(u.id)}">${esc(u.name || `${u.id.slice(0, 6)}…${u.id.slice(-4)}`)}</td><td>${roleTag(u.role)}</td><td>${u.msgs}</td><td>${usd4(u.spend)}</td><td>${u.searches}</td><td>${u.scans}</td><td>${u.vision}</td></tr>`).join('')
     : `<tr><td colspan="7" class="muted">No activity today.</td></tr>`;
   const toolRows = m.topTools.length
     ? m.topTools.map(([t, c]) => `<tr><td class="mono">${esc(t)}</td><td>${c}</td></tr>`).join('')
