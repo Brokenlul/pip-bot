@@ -116,6 +116,7 @@ export async function recordFeedback(opts: {
 
 interface TodayRow {
   user_id: string;
+  guild_id: string;
   cost_usd: number;
   web_searches: number;
   had_vision: boolean;
@@ -127,7 +128,7 @@ async function todayUsage(): Promise<TodayRow[]> {
   if (!db) return [];
   const { data, error } = await db
     .from('usage_log')
-    .select('user_id, cost_usd, web_searches, had_vision, tools_used')
+    .select('user_id, guild_id, cost_usd, web_searches, had_vision, tools_used')
     .gte('created_at', dayStartUtc().toISOString());
   if (error) {
     console.warn(`[beta] todayUsage: ${error.message}`);
@@ -351,6 +352,19 @@ export async function betaGate(msg: NormalizedMessage): Promise<GateDecision> {
   // 5. Global kill-switch — the real protection.
   if (globalSpend >= spendCap || globalMsgs >= cfg.BETA_DAILY_GLOBAL_MSGS) {
     return blocked("Pip's daily beta budget is spent — back at midnight UTC. This keeps the beta free for everyone 🌱");
+  }
+
+  // 5b. Per-server spend cap — one busy guild can't drain the global budget.
+  //     DMs skip this (bounded by the per-user cap instead).
+  if (!isDM) {
+    const guildSpend = rows
+      .filter((r) => r.guild_id === msg.guildId)
+      .reduce((s, r) => s + Number(r.cost_usd), 0);
+    if (guildSpend >= cfg.BETA_GUILD_DAILY_SPEND_USD) {
+      return blocked(
+        "This server's daily Pip budget is spent — back at midnight UTC. DMs still work if you're a beta tester 🌱",
+      );
+    }
   }
 
   // 6. Per-user daily message cap.

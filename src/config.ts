@@ -65,6 +65,10 @@ const Schema = z
     BETA_DAILY_SPEND_USD: z.coerce.number().positive().default(18),
     BETA_DAILY_GLOBAL_MSGS: z.coerce.number().int().positive().default(350),
     BETA_USER_DAILY_MSGS: z.coerce.number().int().positive().default(25),
+    // Per-server daily spend cap (USD). Bounds what any single guild can burn
+    // even while the global budget has headroom. DMs are not guild-capped —
+    // the per-user cap bounds those.
+    BETA_GUILD_DAILY_SPEND_USD: z.coerce.number().positive().default(10),
   })
   .superRefine((cfg, ctx) => {
     // A lone Discord token or app id means the adapter can't start — flag it
