@@ -71,7 +71,9 @@ const WEB_SEARCH_TOOL = { type: 'web_search_20250305', name: 'web_search', max_u
 // Hard ceiling on a single reply. The mention/DM path has no Discord ACK
 // deadline, but a user should never wait minutes. When this fires we abort the
 // in-flight model call and return whatever we have (or a graceful timeout note).
-const ANSWER_BUDGET_MS = 70_000;
+// 90s not 70s: a broad question (multi-tool + web search + chart) measured
+// 71.4s of legitimate work on 2026-07-06 — 70s cut it off at the final text.
+const ANSWER_BUDGET_MS = 90_000;
 
 const SYSTEM_PROMPT = `You are **Pip**, a sharp research analyst and thinking-companion embedded in a crypto / finance / trading community.
 
@@ -229,10 +231,12 @@ function getClient(): Anthropic {
   if (!anthropic)
     anthropic = new Anthropic({
       apiKey: getConfig().ANTHROPIC_API_KEY,
-      // SDK default is 10 minutes. These per-request bounds stack across retries
-      // AND agent steps, so keep them tight — the overall ANSWER_BUDGET_MS below
-      // is the real ceiling. One stalled call now fails in ~25s, not 40s×3.
-      timeout: 25_000,
+      // SDK default is 10 minutes; ANSWER_BUDGET_MS's abort signal is the real
+      // ceiling. 60s not 25s: a non-streaming call carrying ~60k tool-result
+      // tokens (or running server-side web search) legitimately exceeds 25s —
+      // at 25s the client killed its own healthy calls and reported them as
+      // "busy upstream" (observed live 2026-07-06, ~50s = 2×25s stall pattern).
+      timeout: 60_000,
       maxRetries: 1,
     });
   return anthropic;
@@ -443,6 +447,9 @@ export async function answer(msg: NormalizedMessage, opts: AnswerOptions = {}): 
   let finalText = '';
   let forcedNoteSent = false;
   let apiErrored = false;
+  type ApiErrorKind = 'rate_limit' | 'overloaded' | 'stall' | 'other';
+  let apiErrorKind: ApiErrorKind = 'other';
+  let retriedTransient = false;
   for (let step = 0; step < maxSteps; step++) {
     // Once the per-request tool budget is spent — or this is the last loop
     // turn — force a text answer instead of letting the model burn the step
@@ -488,12 +495,36 @@ export async function answer(msg: NormalizedMessage, opts: AnswerOptions = {}): 
         timedOut = true;
         break;
       }
-      // Transient API failure (429 rate limit, 529 overloaded, network) after
-      // the SDK's own retry. Rethrowing here skips usage logging and surfaces
-      // the adapter's hard "hit a snag" embed — fail soft instead: the
-      // post-loop fallback replies in-voice and logs the spend so far.
+      // Transient API failure after the SDK's own retry. Classify it — the
+      // status code decides both the log line (debuggability) and the reply
+      // copy (a generic "busy upstream" made testers think Pip was at capacity).
+      const status = (e as { status?: number })?.status;
+      const kind: ApiErrorKind =
+        status === 429
+          ? 'rate_limit'
+          : status != null && status >= 500
+            ? 'overloaded'
+            : e instanceof Anthropic.APIConnectionTimeoutError
+              ? 'stall'
+              : 'other';
+      console.error(
+        `[agent] model call failed (step ${step}, ${kind}${status != null ? ` ${status}` : ''}): ${(e as Error)?.message ?? e}`,
+      );
+      // 429/529/network fail fast, so one short-backoff retry inside the budget
+      // usually lands (rate-limit windows roll over in seconds). A stall already
+      // ate its 60s — retrying it would just re-stall into the deadline.
+      const budgetLeftMs = ANSWER_BUDGET_MS - (Date.now() - startedAt);
+      if (!retriedTransient && kind !== 'stall' && budgetLeftMs > 15_000) {
+        retriedTransient = true;
+        await new Promise((r) => setTimeout(r, 2_500));
+        step--; // re-run this same step
+        continue;
+      }
+      // Rethrowing here skips usage logging and surfaces the adapter's hard
+      // "hit a snag" embed — fail soft instead: the post-loop fallback replies
+      // in-voice and logs the spend so far.
       apiErrored = true;
-      console.error(`[agent] model call failed (step ${step}): ${(e as Error)?.message ?? e}`);
+      apiErrorKind = kind;
       break;
     }
 
@@ -584,7 +615,11 @@ export async function answer(msg: NormalizedMessage, opts: AnswerOptions = {}): 
     finalText = timedOut
       ? "That one took too long to pull together — the model or a data source was slow. Ask again in a moment, or narrow the question (e.g. one asset at a time)."
       : apiErrored
-        ? 'Hit a busy moment upstream mid-answer — nothing wrong with the question. Give it a few seconds and ask again.'
+        ? apiErrorKind === 'rate_limit'
+          ? "I'm briefly rate-limited on my AI provider — a per-minute cap, nothing to do with how busy this server is. Wait ~30 seconds and ask again."
+          : apiErrorKind === 'overloaded'
+            ? 'My AI provider is having a busy moment on their end — not your question, not this server. Ask again in a minute.'
+            : 'That answer stalled mid-generation and I cut it off — ask again in a moment, or narrow it (e.g. one asset at a time).'
         : "I couldn't complete a grounded answer for that — a downstream tool kept failing. Try again in a moment.";
   }
 
