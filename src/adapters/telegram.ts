@@ -186,7 +186,7 @@ export class TelegramAdapter implements PlatformAdapter {
     const typingTimer = setInterval(keepTyping, 4500);
 
     try {
-      let reply: NormalizedReply;
+      let reply: NormalizedReply | null;
       try {
         reply = await this.handler(msg, {
           allowWeb: gate.features.web,
@@ -201,6 +201,7 @@ export class TelegramAdapter implements PlatformAdapter {
         await this.send(ctx, 'Pip hit a snag pulling that together. Try again in a moment.');
         return;
       }
+      if (!reply) return; // draining for restart — replacement instance answers
       await this.send(ctx, toHtml(reply), { html: true });
       // Rendered charts follow the text as photos. Best-effort — a failed
       // photo upload must never eat the answer that already went out.

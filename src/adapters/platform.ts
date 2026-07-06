@@ -59,10 +59,12 @@ export interface NormalizedReply {
   attachments?: NormalizedAttachment[];
 }
 
+// null = the process is draining for a restart/deploy swap: drop the message
+// silently — the replacement instance (already connecting) will serve the user.
 export type MessageHandler = (
   msg: NormalizedMessage,
   opts?: AnswerOptions,
-) => Promise<NormalizedReply>;
+) => Promise<NormalizedReply | null>;
 
 export interface PlatformAdapter {
   start(handler: MessageHandler): Promise<void>;

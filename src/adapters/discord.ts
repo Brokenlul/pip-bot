@@ -157,9 +157,10 @@ export class DiscordAdapter implements PlatformAdapter {
     msg: NormalizedMessage,
     question: string,
     opts: AnswerOptions,
-  ): Promise<{ embeds: EmbedBuilder[]; files?: AttachmentBuilder[] }> {
+  ): Promise<{ embeds: EmbedBuilder[]; files?: AttachmentBuilder[] } | null> {
     try {
       const reply = await this.handler!(msg, opts);
+      if (!reply) return null; // draining for restart — replacement instance answers
       const embed = toEmbed(reply, question);
       // Rendered charts ride as attachments; the first one displays inside the
       // branded embed (attachment:// reference), extras appear below it.
@@ -267,7 +268,7 @@ export class DiscordAdapter implements PlatformAdapter {
     try {
       const label = question || (images.length ? `[${images.length} chart image${images.length > 1 ? 's' : ''}]` : '');
       const payload = await this.computePayload(msg, label, this.optsFrom(gate));
-      await this.send(message, payload);
+      if (payload) await this.send(message, payload);
     } finally {
       clearInterval(typingTimer);
     }
