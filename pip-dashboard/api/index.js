@@ -4,7 +4,8 @@
 // founder vs tester vs guest differentiation. Auto-refreshes every 60s.
 //
 // Env: SUPABASE_URL, SUPABASE_SECRET_KEY (required); FOUNDER_DISCORD_ID,
-// DASHBOARD_TOKEN, BETA_ENDS_AT, BETA_DAILY_SPEND_USD, BETA_DAILY_GLOBAL_MSGS.
+// DASHBOARD_TOKEN, BETA_ENDS_AT, BETA_DAILY_SPEND_USD, BETA_DAILY_GLOBAL_MSGS,
+// BETA_GUILD_DAILY_SPEND_USD (per-server cap, mirror of the bot's value).
 
 const crypto = require('node:crypto');
 
@@ -22,6 +23,7 @@ function tokenOk(provided, expected) {
 
 const SPEND_CAP = Number(process.env.BETA_DAILY_SPEND_USD || 18);
 const MSG_CAP = Number(process.env.BETA_DAILY_GLOBAL_MSGS || 350);
+const GUILD_CAP = Number(process.env.BETA_GUILD_DAILY_SPEND_USD || 10);
 const FOUNDER_KEYS = new Set(
   [
     process.env.FOUNDER_DISCORD_ID ? `discord:${process.env.FOUNDER_DISCORD_ID}` : null,
@@ -95,6 +97,15 @@ function metrics(rows, testers, feedback) {
   // surface split (today)
   const dm = today.filter((r) => String(r.guild_id).startsWith('dm:'));
   const srv = today.filter((r) => !String(r.guild_id).startsWith('dm:'));
+
+  // per-server spend (today) — each guild has its own daily cap in the gate
+  const byGuild = new Map();
+  for (const r of srv) {
+    const g = byGuild.get(r.guild_id) || { id: String(r.guild_id), msgs: 0, spend: 0 };
+    g.msgs++; g.spend += Number(r.cost_usd) || 0;
+    byGuild.set(r.guild_id, g);
+  }
+  const guildsToday = [...byGuild.values()].sort((a, b) => b.spend - a.spend);
 
   // ---- pilot metrics over TESTERS only -----------------------------------
   const tRows = rows.filter((r) => r._role === 'tester');
@@ -178,7 +189,7 @@ function metrics(rows, testers, feedback) {
     spend: { founder: spendByRole('founder'), tester: spendByRole('tester'), guest: spendByRole('guest') },
     surface: { dm: dm.length, srv: srv.length, dmSpend: sum(dm, (r) => r.cost_usd), srvSpend: sum(srv, (r) => r.cost_usd) },
     weekSpend, weekMsgs: rows.length, cacheRate: rows.length ? cacheHits / rows.length : 0,
-    days, usersToday, topTools,
+    days, usersToday, topTools, guildsToday,
     up, down,
     stack: [
       metricRow('Activation', 'Asked ≥3 questions in first 48h', activationPct == null ? '—' : `${activated.length}/${totalTesters} · ${pct(activationPct)}`, activationPct != null && activationPct >= 0.8, '≥80%'),
@@ -233,6 +244,14 @@ function render(m) {
   const toolRows = m.topTools.length
     ? m.topTools.map(([t, c]) => `<tr><td class="mono">${esc(t)}</td><td>${c}</td></tr>`).join('')
     : `<tr><td colspan="2" class="muted">No tool calls yet.</td></tr>`;
+  const guildRows = m.guildsToday.length
+    ? m.guildsToday.map((g) => {
+        const f = GUILD_CAP ? g.spend / GUILD_CAP : 0;
+        return `<tr><td class="mono">${esc(g.id)}</td><td>${g.msgs}</td><td>${usd4(g.spend)}</td>
+          <td style="min-width:140px"><div class="meter" style="margin:0"><div class="fill" style="width:${Math.min(100, f * 100).toFixed(1)}%;background:${barColor(f)}"></div></div></td>
+          <td class="muted">${pct(f)} of ${usd(GUILD_CAP)}${f >= 1 ? ' · <span class="bad">capped</span>' : ''}</td></tr>`;
+      }).join('')
+    : `<tr><td colspan="5" class="muted">No server messages today.</td></tr>`;
 
   const body = `
     <div class="grid3">
@@ -258,6 +277,11 @@ function render(m) {
       ${stat('Messages · 7d', m.weekMsgs.toLocaleString())}
       ${stat('Cache hit rate', pct(m.cacheRate), 'served free')}
       ${stat('Votes · 7d', `<span class="ok">▲ ${m.up}</span> · <span class="bad">▼ ${m.down}</span>`, 'on Pip answers')}
+    </div>
+
+    <div class="card">
+      <div class="eyebrow">Per-server spend · today (each server capped at ${usd(GUILD_CAP)}/day)</div>
+      <table><thead><tr><th>Server</th><th>Msgs</th><th>Spend</th><th></th><th>Of cap</th></tr></thead><tbody>${guildRows}</tbody></table>
     </div>
 
     <div class="card">
