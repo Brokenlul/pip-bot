@@ -320,3 +320,94 @@ export const priceChartTool: Tool<Input, Output> = {
   },
   citation: (_, out) => ({ label: `Hyperliquid candles (${out.coin} ${out.interval})`, url: out.source_url }),
 };
+
+// ---- indicator_snapshot -----------------------------------------------------
+// Same candles + math as the chart tool, no image. Exists because the model
+// otherwise ASSERTS price-vs-MA relationships from memory (it told a user to
+// watch the 4h EMA200 as support while price was 3% below it).
+
+const SnapshotInputSchema = z.object({
+  coin: z.string().min(1),
+  interval: z.enum(INTERVALS).optional(),
+  indicators: z.array(z.enum(INDICATORS)).max(6).optional(),
+});
+type SnapshotInput = z.infer<typeof SnapshotInputSchema>;
+
+interface SnapshotOutput {
+  coin: string;
+  interval: Interval;
+  last_close: number;
+  window_high: number;
+  window_low: number;
+  window_change_pct: number;
+  /** Current values, same format as the chart readout. */
+  indicator_readout: Record<string, string>;
+  /** Explicit ABOVE/BELOW relation of the last close vs each overlay line. */
+  price_vs: Record<string, string>;
+  source_url: string;
+}
+
+const DEFAULT_SNAPSHOT: Indicator[] = ['ema20', 'ema50', 'ema200', 'rsi', 'macd'];
+
+export const indicatorSnapshotTool: Tool<SnapshotInput, SnapshotOutput> = {
+  name: 'indicator_snapshot',
+  description:
+    'Current indicator VALUES for any Hyperliquid perp (BTC/ETH/SOL/… + builder markets) on a chosen timeframe, WITHOUT drawing a chart: ema20/50/100/200, sma20/50, vwap, bollinger, macd, rsi, fvg. Returns each value plus an explicit "price is ABOVE/BELOW X by N%" relation. Use this BEFORE stating anything about moving averages, RSI, MACD, or price-vs-level relationships in a text answer — never assert those from memory. Defaults to ema20/ema50/ema200 + rsi + macd.',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      coin: { type: 'string', description: 'Perp ticker (e.g. "BTC", "HYPE"). No $ prefix.' },
+      interval: {
+        type: 'string',
+        enum: [...INTERVALS],
+        description: 'Candle timeframe the claim is about (default "1h").',
+      },
+      indicators: {
+        type: 'array',
+        maxItems: 6,
+        items: { type: 'string', enum: [...INDICATORS] },
+        description: 'Which indicators to compute. Omit for ema20/ema50/ema200 + rsi + macd.',
+      },
+    },
+    required: ['coin'],
+  },
+  validate: zValidator(SnapshotInputSchema),
+  execute: async (input) => {
+    return withRetry(
+      async () => {
+        const interval = input.interval ?? '1h';
+        const coin = await resolveCoinName(input.coin);
+        if (!coin) throw new Error(`Coin "${input.coin}" not found on Hyperliquid — confirm the ticker.`);
+        const all = await fetchCandles(coin, interval);
+        if (all.length < 2) throw new Error(`No candle data for ${coin} on ${interval}.`);
+        const candles = all.slice(-DISPLAY_COUNT);
+        const wanted = [...new Set(input.indicators?.length ? input.indicators : DEFAULT_SNAPSHOT)];
+        const { overlays, readout } = buildIndicators(all, candles, wanted);
+
+        const last = candles[candles.length - 1]!;
+        const priceVs: Record<string, string> = {};
+        for (const ov of overlays) {
+          const v = [...ov.points].reverse().find((x) => x != null);
+          if (v == null) continue;
+          const diffPct = ((last.c - v) / v) * 100;
+          priceVs[ov.label] = `price is ${diffPct >= 0 ? 'ABOVE' : 'BELOW'} ${ov.label} by ${Math.abs(diffPct).toFixed(2)}%`;
+        }
+
+        const first = candles[0]!;
+        return {
+          coin,
+          interval,
+          last_close: last.c,
+          window_high: Math.max(...candles.map((c) => c.h)),
+          window_low: Math.min(...candles.map((c) => c.l)),
+          window_change_pct: Number((((last.c - first.o) / first.o) * 100).toFixed(2)),
+          indicator_readout: readout,
+          price_vs: priceVs,
+          source_url: `https://app.hyperliquid.xyz/trade/${coin}`,
+        };
+      },
+      `indsnap:${input.coin}:${input.interval ?? '1h'}`,
+    );
+  },
+  citation: (_, out) => ({ label: `Hyperliquid candles (${out.coin} ${out.interval})`, url: out.source_url }),
+};

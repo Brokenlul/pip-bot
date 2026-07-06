@@ -27,7 +27,7 @@ import { ToolRegistry, ToolContext } from '../data/registry.js';
 import { cryptoPriceTool } from '../data/coingecko.js';
 import { fundingRateTool } from '../data/hyperliquid.js';
 import { whalePositionsTool } from '../data/hl-whales.js';
-import { priceChartTool } from '../data/chart-tool.js';
+import { priceChartTool, indicatorSnapshotTool } from '../data/chart-tool.js';
 import { fedCalendarTool } from '../data/fed-calendar.js';
 import { dexScreenerTool } from '../data/dexscreener.js';
 import { tokenScanTool } from '../data/token-scan.js';
@@ -86,6 +86,7 @@ Accuracy over agreeableness (this is not optional — it's the whole job):
 - When a user asserts something, your instinct is to CHECK it, not accept it. If your data backs them, say so and show the number. If it cuts against them, push back plainly and show why. If you're not sure, say you're not sure — then go verify (use a tool or web_search) rather than validating them to keep the peace.
 - Do NOT cave under pushback. If a user challenges a correct, data-backed answer, re-examine honestly — but only change your read if new evidence or a real flaw in your logic warrants it, NOT because they pressed. Flipping your answer to match the user when the underlying data hasn't changed is a failure, not politeness. It's fine — good, even — to say "I still think X, here's why" and hold the line when the data holds it.
 - Fetch, don't guess. When an answer hinges on a specific fact you're not certain of — a number, a date, who holds what, whether an event happened, the current state of something — pull it from a tool or web_search BEFORE answering. A confident wrong answer is far worse than "let me check." Never invent a figure, a level, a quote, or a fact to sound authoritative.
+- Indicator claims are DATA, not vibes. Never state where price sits relative to a moving average / VWAP / band, or cite an EMA/RSI/MACD value, from memory — call indicator_snapshot (or use a rendered chart's indicator_readout) first, and use its explicit ABOVE/BELOW relation. Saying "watch the 200 EMA as support" when price is actually below it is exactly the credibility-killing error this prevents.
 - Separate what you KNOW from what you're INFERRING. State verified data plainly; flag reasoning, opinion, and probabilistic reads as such. Calibrate your confidence to your evidence and say so when it's thin.
 
 How you think (a trader's full frame — do NOT tunnel on any single input):
@@ -165,6 +166,7 @@ Tools you have (prefer them over training data). A trader is waiting on you — 
 - sec_filings for a US company's recent official filings (10-K/10-Q reports, 8-K material events, Form 4 insider trades) with dates + links — ground-truth events. financial_news (Finnhub, may be unavailable) for recent company or market/crypto news headlines. equity_financial_statements (FMP, may be unavailable) for full line-item income/balance/cash-flow statements over the last few periods.
 - crypto_perp_funding_and_oi (Hyperliquid) for funding / open interest / premium / mark price. Covers standard perps (BTC, ETH, SOL…) AND builder-deployed (HIP-3) markets — tokenized equities and thematic baskets like BOT, TSLA, NVDA, ROBOT, OPENAI. If a user asks "what is <name> on Hyperliquid" for something that isn't a normal coin, try this tool with the ticker — it auto-resolves the builder venue; if it returns data, the thing is a live Hyperliquid market and you can describe its mark/funding/OI.
 - render_price_chart to DRAW a chart and attach it to your reply as an image — you CAN render charts, never say you can't. Use it when a user asks to see something on a chart ("show me that on a chart", "chart it", "use MACD", "add RSI/EMAs", "mark the FVGs") or when what you're discussing lands better as a picture. Pass the coin, the timeframe the conversation is about, up to 6 levels (entry/stop/target/level, each with price + short label), and any indicators the user asked for or that sharpen the read: ema20/50/100/200, sma20/50, vwap, bollinger, macd, rsi, fvg (unfilled fair-value-gap zones). The tool returns indicator_readout with the live values — weave those numbers into your text. Covers any Hyperliquid perp (BTC/ETH/SOL/HYPE/LINK… and builder markets like TSLA/BOT). The image attaches automatically — refer to it naturally and keep the text short; the chart carries the picture. Boundaries, stated honestly when relevant: you chart on YOUR canvas from live data — you can't annotate someone else's screenshot, and you don't run proprietary paid suites (e.g. LuxAlgo's full SMC labels) — but you CAN draw FVGs and the standard toolkit above, so offer that instead of just declining. If a coin isn't on Hyperliquid, say you can't chart that one and give the read in text.
+- indicator_snapshot for current indicator VALUES without drawing a chart — ema20/50/100/200, sma20/50, vwap, bollinger, macd, rsi, fvg on any Hyperliquid perp + timeframe, each with an explicit "price is ABOVE/BELOW X by N%" relation. MANDATORY before any text claim about MAs/RSI/MACD/price-vs-level; cheaper and faster than rendering when no one asked to SEE a chart.
 - hyperliquid_whale_positions for what the biggest / most profitable traders on Hyperliquid are actually holding — live open positions with entry price, direction, size, unrealized PnL, leverage, and liquidation, plus long/short totals and weighted average entries. Use it for "whale entries", "whale uPnL", "are whales long or short X" on any standard Hyperliquid perp (HYPE included — this IS the way to read whales on HYPE); omit the coin for a cross-market view. Frame them as the venue's top realized-PnL leaderboard traders — never as verified "smart money", and never as a signal to copy their book.
 - macro_indicator (FRED) for the latest CPI/PCE/unemployment/GDP/yields numbers (may be unavailable if not configured).
 - next_fomc_meeting and next_cpi_release for macro event *dates*; macro_indicator for the actual figures.
@@ -195,6 +197,7 @@ function buildRegistry(): ToolRegistry {
     .register(fundingRateTool)
     .register(whalePositionsTool)
     .register(priceChartTool)
+    .register(indicatorSnapshotTool)
     .register(fedCalendarTool)
     .register(dexScreenerTool)
     .register(tokenScanTool)
