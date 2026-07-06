@@ -193,7 +193,7 @@ async function autoEnroll(platform: string, platformId: string, name?: string): 
     console.warn(`[beta] autoEnroll: ${error.message}`);
     return false;
   }
-  console.log(`[beta] auto-enrolled ${platform}:${platformId} (${name ?? 'auto'}) via allowlisted server`);
+  console.log(`[beta] auto-enrolled ${platform}:${platformId} (${name ?? 'auto'}) via server invite`);
   return true;
 }
 
@@ -306,19 +306,21 @@ export async function betaGate(msg: NormalizedMessage): Promise<GateDecision> {
     const ends = new Date(cfg.BETA_ENDS_AT).getTime();
     if (Number.isFinite(ends) && now > ends) {
       return blocked(
-        "The Pip beta has wrapped — thank you for testing 🌱 We're folding your feedback in. You'll hear when Pip is back.",
+        cfg.BETA_END_MESSAGE ??
+          "The Pip beta has wrapped — thank you for testing 🌱 We're folding your feedback in. You'll hear when Pip is back.",
       );
     }
   }
 
-  // 1. Allowlist — the strongest guardrail. Anyone who reaches Pip inside an
-  //    EXPLICITLY allowlisted server is auto-enrolled: the server invite is the
-  //    trust boundary there, and per-user caps still bound every new enrollee.
-  //    (No auto-enroll when BETA_ALLOWED_GUILDS is empty — that list being set
-  //    is what makes the server a closed room.)
+  // 1. Enrollment. The server INVITE is the trust boundary (user decision
+  //    2026-07-06): anyone who reaches Pip inside any server it was added to
+  //    is auto-enrolled — adding the bot needs Manage Server, and the per-guild
+  //    spend cap + per-user caps bound every new enrollee. DMs stay tester-only
+  //    (no auto-enroll from DMs; a DM-first user needs a guild touch or a
+  //    manual/handle invite first).
   let tester = await isTester(msg.platform, msg.userId);
   if (!tester) tester = await claimHandleInvite(msg);
-  if (!tester && !msg.guildId.startsWith('dm:') && csvSet(cfg.BETA_ALLOWED_GUILDS).has(msg.guildId)) {
+  if (!tester && !msg.guildId.startsWith('dm:')) {
     tester = await autoEnroll(msg.platform, msg.userId, msg.userName);
   }
   if (!tester) {
@@ -329,7 +331,9 @@ export async function betaGate(msg: NormalizedMessage): Promise<GateDecision> {
     return blocked('Pip is in private beta right now. Sit tight — public access is coming soon. 🌱');
   }
 
-  // 2. Server / channel allowlist (DMs from testers always pass).
+  // 2. Optional server / channel restriction — only bites when the env lists
+  //    are non-empty (empty = open to any server Pip is invited to). DMs from
+  //    testers always pass.
   const isDM = msg.guildId.startsWith('dm:');
   if (!isDM) {
     const guilds = csvSet(cfg.BETA_ALLOWED_GUILDS);

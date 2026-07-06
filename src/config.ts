@@ -55,6 +55,9 @@ const Schema = z
       .transform((v) => ['true', '1'].includes(v.trim().toLowerCase())),
     // ISO timestamp; after it Pip stops serving and posts a wrap-up. Optional.
     BETA_ENDS_AT: z.string().optional(),
+    // Wrap-up message posted after BETA_ENDS_AT (falls back to a generic one).
+    // Set this to the launch message with the site/payment URL when ready.
+    BETA_END_MESSAGE: z.string().optional(),
     // Discord user id to DM on spend alerts (50/80/100%). Optional.
     FOUNDER_DISCORD_ID: z.string().optional(),
     // Comma-separated allowlists. Empty = allow all servers / all channels.
