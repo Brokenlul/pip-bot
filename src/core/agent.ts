@@ -439,6 +439,7 @@ export async function answer(msg: NormalizedMessage, opts: AnswerOptions = {}): 
 
   let finalText = '';
   let forcedNoteSent = false;
+  let apiErrored = false;
   for (let step = 0; step < maxSteps; step++) {
     // Once the per-request tool budget is spent — or this is the last loop
     // turn — force a text answer instead of letting the model burn the step
@@ -484,7 +485,13 @@ export async function answer(msg: NormalizedMessage, opts: AnswerOptions = {}): 
         timedOut = true;
         break;
       }
-      throw e;
+      // Transient API failure (429 rate limit, 529 overloaded, network) after
+      // the SDK's own retry. Rethrowing here skips usage logging and surfaces
+      // the adapter's hard "hit a snag" embed — fail soft instead: the
+      // post-loop fallback replies in-voice and logs the spend so far.
+      apiErrored = true;
+      console.error(`[agent] model call failed (step ${step}): ${(e as Error)?.message ?? e}`);
+      break;
     }
 
     // Accumulate usage for cost tracking (cache fields may be absent on old SDK).
@@ -573,7 +580,9 @@ export async function answer(msg: NormalizedMessage, opts: AnswerOptions = {}): 
   if (!finalText) {
     finalText = timedOut
       ? "That one took too long to pull together — the model or a data source was slow. Ask again in a moment, or narrow the question (e.g. one asset at a time)."
-      : "I couldn't complete a grounded answer for that — a downstream tool kept failing. Try again in a moment.";
+      : apiErrored
+        ? 'Hit a busy moment upstream mid-answer — nothing wrong with the question. Give it a few seconds and ask again.'
+        : "I couldn't complete a grounded answer for that — a downstream tool kept failing. Try again in a moment.";
   }
 
   const reply = buildReply({ body: finalText, sources: dedupe(citations), attachments });
