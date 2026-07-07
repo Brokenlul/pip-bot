@@ -11,6 +11,9 @@ export const CAPS = {
     cooldownMs: 20_000, // kills spam bursts & double-fires
     maxQuestionLen: 500, // bounds input tokens
   },
+  // One-time tweet-for-a-week trial extension. extensionDays should match the
+  // initial trial length baked into db/migrations/0006_trial.sql.
+  trial: { extensionDays: 7 },
   // Fraction of the daily spend cap at which we shed features to flatten cost.
   degradeAtFraction: 0.8,
   alertFractions: [0.5, 0.8, 1.0] as const,

@@ -137,20 +137,45 @@ async function todayUsage(): Promise<TodayRow[]> {
   return (data ?? []) as TodayRow[];
 }
 
-async function isTester(platform: string, platformId: string): Promise<boolean> {
+/** One user's spend over the rolling trial week, across guilds and DMs. */
+async function userWeekSpend(platform: string, userId: string): Promise<number> {
   const db = getDb();
-  if (!db) return false;
+  if (!db) return 0;
+  const since = new Date(Date.now() - 7 * 86_400_000).toISOString();
+  const { data, error } = await db
+    .from('usage_log')
+    .select('cost_usd')
+    .eq('platform', platform)
+    .eq('user_id', userId)
+    .gte('created_at', since);
+  if (error) {
+    console.warn(`[beta] userWeekSpend: ${error.message}`);
+    return 0;
+  }
+  return (data ?? []).reduce((s, r) => s + Number(r.cost_usd), 0);
+}
+
+/** The slice of a beta_testers row the gate needs (trial window + extension). */
+interface TesterRow {
+  access_until: string | null;
+  extension_used: boolean;
+}
+const TESTER_COLS = 'access_until, extension_used';
+
+async function getTester(platform: string, platformId: string): Promise<TesterRow | null> {
+  const db = getDb();
+  if (!db) return null;
   const { data, error } = await db
     .from('beta_testers')
-    .select('platform_id')
+    .select(TESTER_COLS)
     .eq('platform', platform)
     .eq('platform_id', platformId)
     .limit(1);
   if (error) {
-    console.warn(`[beta] isTester: ${error.message}`);
-    return false;
+    console.warn(`[beta] getTester: ${error.message}`);
+    return null;
   }
-  return (data?.length ?? 0) > 0;
+  return (data?.[0] as TesterRow | undefined) ?? null;
 }
 
 /**
@@ -159,42 +184,44 @@ async function isTester(platform: string, platformId: string): Promise<boolean> 
  * row, claim it: rekey the row to their numeric id so every later check hits
  * the fast platform_id path.
  */
-async function claimHandleInvite(msg: NormalizedMessage): Promise<boolean> {
-  if (msg.platform !== 'telegram' || !msg.userName) return false;
+async function claimHandleInvite(msg: NormalizedMessage): Promise<TesterRow | null> {
+  if (msg.platform !== 'telegram' || !msg.userName) return null;
   const db = getDb();
-  if (!db) return false;
+  if (!db) return null;
   const handle = `@${msg.userName.toLowerCase()}`;
   const { data, error } = await db
     .from('beta_testers')
     .update({ platform_id: msg.userId, name: msg.userName })
     .eq('platform', 'telegram')
     .eq('platform_id', handle)
-    .select('platform_id');
+    .select(TESTER_COLS);
   if (error) {
     console.warn(`[beta] claimHandleInvite: ${error.message}`);
-    return false;
+    return null;
   }
-  const claimed = (data?.length ?? 0) > 0;
+  const claimed = (data?.[0] as TesterRow | undefined) ?? null;
   if (claimed) console.log(`[beta] telegram ${handle} claimed by id ${msg.userId}`);
   return claimed;
 }
 
 /** First-touch enrollment from an allowlisted server. Idempotent (PK upsert). */
-async function autoEnroll(platform: string, platformId: string, name?: string): Promise<boolean> {
+async function autoEnroll(platform: string, platformId: string, name?: string): Promise<TesterRow | null> {
   const db = getDb();
-  if (!db) return false;
-  const { error } = await db
+  if (!db) return null;
+  const { data, error } = await db
     .from('beta_testers')
     .upsert(
       { platform, platform_id: platformId, name: name ?? 'auto' },
       { onConflict: 'platform,platform_id', ignoreDuplicates: true },
-    );
+    )
+    .select(TESTER_COLS);
   if (error) {
     console.warn(`[beta] autoEnroll: ${error.message}`);
-    return false;
+    return null;
   }
   console.log(`[beta] auto-enrolled ${platform}:${platformId} (${name ?? 'auto'}) via server invite`);
-  return true;
+  // ignoreDuplicates returns no row when we raced an existing insert — re-read.
+  return (data?.[0] as TesterRow | undefined) ?? getTester(platform, platformId);
 }
 
 // ---- Free exact-match answer cache ----------------------------------------
@@ -269,6 +296,62 @@ async function maybeAlert(spend: number, cap: number): Promise<void> {
   }
 }
 
+// ---- Trial window + one-time tweet extension --------------------------------
+// Every tester gets a 7-day window (DB default, 0006_trial.sql). When it
+// lapses they can unlock ONE extra week by tweeting about Pip and pasting the
+// link in chat. Verification is manual by design: the founder gets the link by
+// DM and revokes fakes in SQL — the $ caps bound what a fake can ever cost.
+
+const TWEET_URL_RE = /https?:\/\/(?:www\.)?(?:x|twitter)\.com\/\w{1,15}\/status\/\d+/i;
+
+function accessLapsed(t: TesterRow, now: number): boolean {
+  if (!t.access_until) return false; // row predates the trial migration — fail open
+  const ends = new Date(t.access_until).getTime();
+  // 'infinity' (never lapses) parses to NaN, and NaN comparisons are false.
+  return Number.isFinite(ends) && now > ends;
+}
+
+/** Atomically claim the one tweet extension. False if already used (or DB down). */
+async function grantTweetExtension(msg: NormalizedMessage, tweetUrl: string): Promise<boolean> {
+  const db = getDb();
+  if (!db) return false;
+  const until = new Date(Date.now() + CAPS.trial.extensionDays * 86_400_000).toISOString();
+  const { data, error } = await db
+    .from('beta_testers')
+    .update({
+      access_until: until,
+      extension_used: true,
+      extension_tweet_url: tweetUrl,
+      extension_claimed_at: new Date().toISOString(),
+    })
+    .eq('platform', msg.platform)
+    .eq('platform_id', msg.userId)
+    .eq('extension_used', false) // the one-time guard, enforced in the row itself
+    .select('platform_id');
+  if (error) {
+    console.warn(`[beta] grantTweetExtension: ${error.message}`);
+    return false;
+  }
+  return (data?.length ?? 0) > 0;
+}
+
+/** DM the founder the claimed tweet link for manual verification. */
+async function notifyTweetClaim(msg: NormalizedMessage, tweetUrl: string): Promise<void> {
+  const cfg = getConfig();
+  if (!cfg.FOUNDER_DISCORD_ID || !founderNotifier) return;
+  await founderNotifier(
+    cfg.FOUNDER_DISCORD_ID,
+    `🐦 Tweet extension claimed by ${msg.platform}:${msg.userId} (${msg.userName ?? 'unknown'})\n${tweetUrl}\n` +
+      `If it's fake, revoke with: update beta_testers set access_until = now() ` +
+      `where platform = '${msg.platform}' and platform_id = '${msg.userId}';`,
+  ).catch(() => {});
+}
+
+function payLine(): string {
+  const url = getConfig().BETA_UPGRADE_URL;
+  return url ? `grab full access here: ${url}` : "paid access is coming soon — you'll hear about it first.";
+}
+
 // ---- The gate --------------------------------------------------------------
 
 export interface GateDecision {
@@ -290,6 +373,7 @@ const ALLOW_ALL: GateDecision = {
 
 const lastMessageAt = new Map<string, number>(); // userKey -> ms (cooldown)
 const politeRepliedToday = new Set<string>(); // non-testers: one reply/day
+const trialNoticedToday = new Set<string>(); // expired trials: one nudge/day
 
 /**
  * The single pre-LLM checkpoint. Returns a decision the adapter acts on BEFORE
@@ -318,7 +402,7 @@ export async function betaGate(msg: NormalizedMessage): Promise<GateDecision> {
   //    spend cap + per-user caps bound every new enrollee. DMs stay tester-only
   //    (no auto-enroll from DMs; a DM-first user needs a guild touch or a
   //    manual/handle invite first).
-  let tester = await isTester(msg.platform, msg.userId);
+  let tester = await getTester(msg.platform, msg.userId);
   if (!tester) tester = await claimHandleInvite(msg);
   if (!tester && !msg.guildId.startsWith('dm:')) {
     tester = await autoEnroll(msg.platform, msg.userId, msg.userName);
@@ -340,6 +424,34 @@ export async function betaGate(msg: NormalizedMessage): Promise<GateDecision> {
     if (guilds.size && !guilds.has(msg.guildId)) return blockedSilent();
     const channels = csvSet(cfg.BETA_ALLOWED_CHANNELS);
     if (channels.size && msg.channelId && !channels.has(msg.channelId)) return blockedSilent();
+  }
+
+  // 2b. Per-user trial window (user decision 2026-07-07): 7 free days, then
+  //     ONE extra week for tweeting about Pip (link pasted in chat, verified
+  //     manually by the founder), then paid. Checked before the cooldown so a
+  //     pasted tweet link is never silently dropped.
+  if (accessLapsed(tester, now)) {
+    const tweetUrl = msg.text.match(TWEET_URL_RE)?.[0];
+    if (tweetUrl && !tester.extension_used) {
+      if (await grantTweetExtension(msg, tweetUrl)) {
+        void notifyTweetClaim(msg, tweetUrl);
+        return blocked("Tweet received — you've unlocked one more free week 🌱 Enjoy! (I do check the links, so keep it up 👀)");
+      }
+      return blocked("Couldn't record that just now — paste the tweet link again in a minute.");
+    }
+    // Nudge once per day, then go quiet — an expired user spamming questions
+    // shouldn't get an expired notice per message.
+    const noticeKey = `${dayStartUtc().toISOString().slice(0, 10)}:${userKey}`;
+    if (trialNoticedToday.has(noticeKey)) return blockedSilent();
+    trialNoticedToday.add(noticeKey);
+    if (!tester.extension_used) {
+      return blocked(
+        'Your free week with Pip is up 🌱 Two ways to keep going:\n' +
+          '1. Tweet what you think of Pip, then paste the tweet link here — unlocks one more free week (one time).\n' +
+          `2. Or ${payLine()}`,
+      );
+    }
+    return blocked(`Your bonus week is up — thanks for testing Pip 🌱 To keep going, ${payLine()}`);
   }
 
   // 3. Cooldown (in-memory) — kills spam bursts & accidental double-fires.
@@ -375,6 +487,13 @@ export async function betaGate(msg: NormalizedMessage): Promise<GateDecision> {
   const mine = rows.filter((r) => r.user_id === msg.userId);
   if (mine.length >= cfg.BETA_USER_DAILY_MSGS) {
     return blocked("You've hit today's beta limit — resets at midnight UTC. This keeps the beta free for everyone 🌱");
+  }
+
+  // 6b. Per-user weekly spend cap ($) — the trial-week budget. Rolling 7 days,
+  //     follows the user across guilds and DMs.
+  const weekSpend = await userWeekSpend(msg.platform, msg.userId);
+  if (weekSpend >= cfg.BETA_USER_WEEKLY_SPEND_USD) {
+    return blocked("You've used this week's Pip budget — it frees up as your week rolls over 🌱");
   }
 
   // 7. Degrade mode + per-user feature budgets.
