@@ -458,8 +458,9 @@ export async function betaGate(msg: NormalizedMessage): Promise<GateDecision> {
   const last = lastMessageAt.get(userKey) ?? 0;
   if (now - last < CAPS.perUser.cooldownMs) return blockedSilent();
 
-  // 4. Read today's spend/usage once (bounded by the global msg cap).
-  const rows = await todayUsage();
+  // 4. Read today's spend/usage and this user's trial-week spend in one hop —
+  //    independent queries, so never pay two sequential DB round trips.
+  const [rows, weekSpend] = await Promise.all([todayUsage(), userWeekSpend(msg.platform, msg.userId)]);
   const globalSpend = rows.reduce((s, r) => s + Number(r.cost_usd), 0);
   const globalMsgs = rows.length;
   const spendCap = cfg.BETA_DAILY_SPEND_USD;
@@ -490,8 +491,7 @@ export async function betaGate(msg: NormalizedMessage): Promise<GateDecision> {
   }
 
   // 6b. Per-user weekly spend cap ($) — the trial-week budget. Rolling 7 days,
-  //     follows the user across guilds and DMs.
-  const weekSpend = await userWeekSpend(msg.platform, msg.userId);
+  //     follows the user across guilds and DMs. (Fetched in step 4.)
   if (weekSpend >= cfg.BETA_USER_WEEKLY_SPEND_USD) {
     return blocked("You've used this week's Pip budget — it frees up as your week rolls over 🌱");
   }

@@ -138,54 +138,56 @@ export class TelegramAdapter implements PlatformAdapter {
     }
 
     const question = stripMention(rawText, botUsername).slice(0, MAX_QUESTION_LEN);
-    const images = await this.collectImages(ctx);
-
-    // Carry the replied-to message's text — it's the context "these"/"that"
-    // refers to, including answers the bot gave a DIFFERENT user (which the
-    // per-user thread memory deliberately can't see).
-    const rtm = message.reply_to_message;
-    const replyToText = (rtm?.text ?? rtm?.caption)?.trim().slice(0, MAX_REPLY_CONTEXT) || undefined;
-
-    const msg: NormalizedMessage = {
-      platform: 'telegram',
-      // Namespace memory per chat, prefixed so a Telegram id can never collide
-      // with a Discord snowflake in the shared guild_id column.
-      guildId: isDM ? `dm:tg:${ctx.from.id}` : `tg:${ctx.chat!.id}`,
-      guildName: isDM ? undefined : chatTitle(ctx),
-      channelId: String(ctx.chat!.id),
-      userId: String(ctx.from.id),
-      userName: ctx.from.username ?? ctx.from.first_name,
-      text: question,
-      images: images.length ? images : undefined,
-      replyToText,
-      replyToBot: replyToText ? rtm?.from?.id === botId : undefined,
-      receivedAt: new Date(),
-    };
-
-    // Beta gate — allowlist / caps / kill-switch — BEFORE any typing or LLM call.
-    const gate = await betaGate(msg);
-    if (!gate.allow) {
-      if (!gate.silent && gate.replyText) await this.send(ctx, gate.replyText);
-      return;
-    }
-
-    // A bare mention with neither text nor an image → nudge. With an image we
-    // proceed even without a caption ("read this chart" is implicit).
-    if (!question && images.length === 0) {
-      await this.send(
-        ctx,
-        "Ask me something about markets — e.g. what's BTC funding right now?, next CPI print?, or drop a chart screenshot.",
-      );
-      return;
-    }
-
-    // Keep a "typing" action alive — answers take a while. Telegram's typing
-    // status auto-expires after ~5s, so refresh it on an interval.
+    // Show life immediately — image download + the beta gate cost up to ~1s of
+    // API/DB round trips before the answer work even starts. Telegram's typing
+    // status auto-expires after ~5s, so refresh it on an interval. (A user the
+    // gate then blocks sees a brief "typing" before the notice — fine trade.)
     const keepTyping = () => void ctx.replyWithChatAction('typing').catch(() => {});
     keepTyping();
     const typingTimer = setInterval(keepTyping, 4500);
 
     try {
+      const images = await this.collectImages(ctx);
+
+      // Carry the replied-to message's text — it's the context "these"/"that"
+      // refers to, including answers the bot gave a DIFFERENT user (which the
+      // per-user thread memory deliberately can't see).
+      const rtm = message.reply_to_message;
+      const replyToText = (rtm?.text ?? rtm?.caption)?.trim().slice(0, MAX_REPLY_CONTEXT) || undefined;
+
+      const msg: NormalizedMessage = {
+        platform: 'telegram',
+        // Namespace memory per chat, prefixed so a Telegram id can never collide
+        // with a Discord snowflake in the shared guild_id column.
+        guildId: isDM ? `dm:tg:${ctx.from.id}` : `tg:${ctx.chat!.id}`,
+        guildName: isDM ? undefined : chatTitle(ctx),
+        channelId: String(ctx.chat!.id),
+        userId: String(ctx.from.id),
+        userName: ctx.from.username ?? ctx.from.first_name,
+        text: question,
+        images: images.length ? images : undefined,
+        replyToText,
+        replyToBot: replyToText ? rtm?.from?.id === botId : undefined,
+        receivedAt: new Date(),
+      };
+
+      // Beta gate — allowlist / caps / kill-switch — BEFORE any LLM call.
+      const gate = await betaGate(msg);
+      if (!gate.allow) {
+        if (!gate.silent && gate.replyText) await this.send(ctx, gate.replyText);
+        return;
+      }
+
+      // A bare mention with neither text nor an image → nudge. With an image we
+      // proceed even without a caption ("read this chart" is implicit).
+      if (!question && images.length === 0) {
+        await this.send(
+          ctx,
+          "Ask me something about markets — e.g. what's BTC funding right now?, next CPI print?, or drop a chart screenshot.",
+        );
+        return;
+      }
+
       let reply: NormalizedReply | null;
       try {
         reply = await this.handler(msg, {

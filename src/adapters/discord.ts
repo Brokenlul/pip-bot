@@ -224,41 +224,9 @@ export class DiscordAdapter implements PlatformAdapter {
       .trim()
       .slice(0, MAX_QUESTION_LEN);
 
-    const images = await collectImages(message);
-    const replyToText = referenced ? extractMessageText(referenced, botId) : undefined;
-
-    const msg: NormalizedMessage = {
-      platform: 'discord',
-      guildId: isDM ? `dm:${message.author.id}` : message.guildId!,
-      guildName: isDM ? undefined : message.guild?.name,
-      channelId: message.channelId,
-      userId: message.author.id,
-      userName: message.author.username,
-      text: question,
-      images: images.length ? images : undefined,
-      replyToText,
-      replyToBot: replyToText ? replyToBot : undefined,
-      receivedAt: new Date(),
-    };
-
-    // Beta gate — allowlist / caps / kill-switch — BEFORE any typing or LLM call.
-    const gate = await betaGate(msg);
-    if (!gate.allow) {
-      if (!gate.silent && gate.replyText) await this.send(message, gate.replyText);
-      return;
-    }
-
-    // A bare mention with neither text nor an image → nudge. With an image we
-    // proceed even if there's no caption ("read this chart" is implicit).
-    if (!question && images.length === 0) {
-      await this.send(
-        message,
-        'Ask me something about markets — e.g. `what\'s BTC funding right now?`, `next CPI print?`, or drop a chart screenshot.',
-      );
-      return;
-    }
-
-    // No 3s ACK deadline here, but answers take a while — keep a typing indicator alive.
+    // Show life immediately — image downloads + the beta gate cost up to ~1s of
+    // CDN/DB round trips before the answer work even starts. (A user the gate
+    // then blocks sees a brief "typing" before the notice — fine trade.)
     const keepTyping = () => {
       if (message.channel.isSendable()) void message.channel.sendTyping().catch(() => {});
     };
@@ -266,6 +234,40 @@ export class DiscordAdapter implements PlatformAdapter {
     const typingTimer = setInterval(keepTyping, 8000);
 
     try {
+      const images = await collectImages(message);
+      const replyToText = referenced ? extractMessageText(referenced, botId) : undefined;
+
+      const msg: NormalizedMessage = {
+        platform: 'discord',
+        guildId: isDM ? `dm:${message.author.id}` : message.guildId!,
+        guildName: isDM ? undefined : message.guild?.name,
+        channelId: message.channelId,
+        userId: message.author.id,
+        userName: message.author.username,
+        text: question,
+        images: images.length ? images : undefined,
+        replyToText,
+        replyToBot: replyToText ? replyToBot : undefined,
+        receivedAt: new Date(),
+      };
+
+      // Beta gate — allowlist / caps / kill-switch — BEFORE any LLM call.
+      const gate = await betaGate(msg);
+      if (!gate.allow) {
+        if (!gate.silent && gate.replyText) await this.send(message, gate.replyText);
+        return;
+      }
+
+      // A bare mention with neither text nor an image → nudge. With an image we
+      // proceed even if there's no caption ("read this chart" is implicit).
+      if (!question && images.length === 0) {
+        await this.send(
+          message,
+          'Ask me something about markets — e.g. `what\'s BTC funding right now?`, `next CPI print?`, or drop a chart screenshot.',
+        );
+        return;
+      }
+
       const label = question || (images.length ? `[${images.length} chart image${images.length > 1 ? 's' : ''}]` : '');
       const payload = await this.computePayload(msg, label, this.optsFrom(gate));
       if (payload) await this.send(message, payload);
