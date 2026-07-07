@@ -403,7 +403,13 @@ export async function betaGate(msg: NormalizedMessage): Promise<GateDecision> {
   const isDM = msg.guildId.startsWith('dm:');
   if (!isDM) {
     const guilds = csvSet(cfg.BETA_ALLOWED_GUILDS);
-    if (guilds.size && !guilds.has(msg.guildId)) return blockedSilent();
+    // The list only constrains the platform it names ids for: bare Discord
+    // snowflakes must not lock out Telegram groups (`tg:<chatId>`) and vice
+    // versa — a stale Discord-only list was silently blocking ALL TG groups.
+    const listCoversPlatform = [...guilds].some(
+      (g) => g.startsWith('tg:') === msg.guildId.startsWith('tg:'),
+    );
+    if (guilds.size && listCoversPlatform && !guilds.has(msg.guildId)) return blockedSilent();
     const channels = csvSet(cfg.BETA_ALLOWED_CHANNELS);
     if (channels.size && msg.channelId && !channels.has(msg.channelId)) return blockedSilent();
   }
