@@ -72,9 +72,9 @@ const Schema = z
     // even while the global budget has headroom. DMs are not guild-capped —
     // the per-user cap bounds those.
     BETA_GUILD_DAILY_SPEND_USD: z.coerce.number().positive().default(10),
-    // Per-user spend cap (USD) over a rolling 7 days — the trial-week budget.
-    // Follows the user across guilds and DMs.
-    BETA_USER_WEEKLY_SPEND_USD: z.coerce.number().positive().default(2),
+    // Per-user daily spend cap (USD) — resets at midnight UTC like the other
+    // daily caps. Follows the user across guilds and DMs.
+    BETA_USER_DAILY_SPEND_USD: z.coerce.number().positive().default(2),
     // Payment/upgrade link shown when a user's trial (and their one tweet
     // extension) lapses. Optional — without it Pip says paid access is coming.
     BETA_UPGRADE_URL: z.string().optional(),

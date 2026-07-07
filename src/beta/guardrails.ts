@@ -137,24 +137,6 @@ async function todayUsage(): Promise<TodayRow[]> {
   return (data ?? []) as TodayRow[];
 }
 
-/** One user's spend over the rolling trial week, across guilds and DMs. */
-async function userWeekSpend(platform: string, userId: string): Promise<number> {
-  const db = getDb();
-  if (!db) return 0;
-  const since = new Date(Date.now() - 7 * 86_400_000).toISOString();
-  const { data, error } = await db
-    .from('usage_log')
-    .select('cost_usd')
-    .eq('platform', platform)
-    .eq('user_id', userId)
-    .gte('created_at', since);
-  if (error) {
-    console.warn(`[beta] userWeekSpend: ${error.message}`);
-    return 0;
-  }
-  return (data ?? []).reduce((s, r) => s + Number(r.cost_usd), 0);
-}
-
 /** The slice of a beta_testers row the gate needs (trial window + extension). */
 interface TesterRow {
   access_until: string | null;
@@ -458,9 +440,9 @@ export async function betaGate(msg: NormalizedMessage): Promise<GateDecision> {
   const last = lastMessageAt.get(userKey) ?? 0;
   if (now - last < CAPS.perUser.cooldownMs) return blockedSilent();
 
-  // 4. Read today's spend/usage and this user's trial-week spend in one hop —
-  //    independent queries, so never pay two sequential DB round trips.
-  const [rows, weekSpend] = await Promise.all([todayUsage(), userWeekSpend(msg.platform, msg.userId)]);
+  // 4. Read today's spend/usage in one hop — feeds the global, per-guild, and
+  //    per-user caps below.
+  const rows = await todayUsage();
   const globalSpend = rows.reduce((s, r) => s + Number(r.cost_usd), 0);
   const globalMsgs = rows.length;
   const spendCap = cfg.BETA_DAILY_SPEND_USD;
@@ -490,10 +472,10 @@ export async function betaGate(msg: NormalizedMessage): Promise<GateDecision> {
     return blocked("You've hit today's beta limit — resets at midnight UTC. This keeps the beta free for everyone 🌱");
   }
 
-  // 6b. Per-user weekly spend cap ($) — the trial-week budget. Rolling 7 days,
-  //     follows the user across guilds and DMs. (Fetched in step 4.)
-  if (weekSpend >= cfg.BETA_USER_WEEKLY_SPEND_USD) {
-    return blocked("You've used this week's Pip budget — it frees up as your week rolls over 🌱");
+  // 6b. Per-user daily spend cap ($) — follows the user across guilds and DMs.
+  const mySpend = mine.reduce((s, r) => s + Number(r.cost_usd), 0);
+  if (mySpend >= cfg.BETA_USER_DAILY_SPEND_USD) {
+    return blocked("You've used today's Pip budget — it resets at midnight UTC 🌱");
   }
 
   // 7. Degrade mode + per-user feature budgets.
