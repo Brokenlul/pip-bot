@@ -392,7 +392,7 @@ export async function betaGate(msg: NormalizedMessage): Promise<GateDecision> {
   if (!tester) {
     const day = dayStartUtc().toISOString().slice(0, 10);
     const key = `${day}:${userKey}`;
-    if (politeRepliedToday.has(key)) return blockedSilent();
+    if (politeRepliedToday.has(key)) return blockedSilent('non-tester repeat', msg);
     politeRepliedToday.add(key);
     return blocked('Pip is in private beta right now. Sit tight — public access is coming soon. 🌱');
   }
@@ -409,9 +409,9 @@ export async function betaGate(msg: NormalizedMessage): Promise<GateDecision> {
     const listCoversPlatform = [...guilds].some(
       (g) => g.startsWith('tg:') === msg.guildId.startsWith('tg:'),
     );
-    if (guilds.size && listCoversPlatform && !guilds.has(msg.guildId)) return blockedSilent();
+    if (guilds.size && listCoversPlatform && !guilds.has(msg.guildId)) return blockedSilent('guild allowlist', msg);
     const channels = csvSet(cfg.BETA_ALLOWED_CHANNELS);
-    if (channels.size && msg.channelId && !channels.has(msg.channelId)) return blockedSilent();
+    if (channels.size && msg.channelId && !channels.has(msg.channelId)) return blockedSilent('channel allowlist', msg);
   }
 
   // 2b. Per-user trial window (user decision 2026-07-07): 7 free days, then
@@ -430,7 +430,7 @@ export async function betaGate(msg: NormalizedMessage): Promise<GateDecision> {
     // Nudge once per day, then go quiet — an expired user spamming questions
     // shouldn't get an expired notice per message.
     const noticeKey = `${dayStartUtc().toISOString().slice(0, 10)}:${userKey}`;
-    if (trialNoticedToday.has(noticeKey)) return blockedSilent();
+    if (trialNoticedToday.has(noticeKey)) return blockedSilent('trial lapsed', msg);
     trialNoticedToday.add(noticeKey);
     if (!tester.extension_used) {
       return blocked(
@@ -444,7 +444,7 @@ export async function betaGate(msg: NormalizedMessage): Promise<GateDecision> {
 
   // 3. Cooldown (in-memory) — kills spam bursts & accidental double-fires.
   const last = lastMessageAt.get(userKey) ?? 0;
-  if (now - last < CAPS.perUser.cooldownMs) return blockedSilent();
+  if (now - last < CAPS.perUser.cooldownMs) return blockedSilent('cooldown', msg);
 
   // 4. Read today's spend/usage in one hop — feeds the global, per-guild, and
   //    per-user caps below.
@@ -505,6 +505,9 @@ export async function betaGate(msg: NormalizedMessage): Promise<GateDecision> {
 function blocked(replyText: string): GateDecision {
   return { allow: false, replyText, features: { web: false, vision: false, scan: false }, degraded: false };
 }
-function blockedSilent(): GateDecision {
+function blockedSilent(reason: string, msg: NormalizedMessage): GateDecision {
+  // Silent drops MUST leave a trace — an unlogged drop looks identical to an
+  // outage from the user's side (took weeks to notice TG groups were blocked).
+  console.log(`[beta] silent block (${reason}): ${msg.platform}:${msg.userId} in ${msg.guildId}`);
   return { allow: false, silent: true, features: { web: false, vision: false, scan: false }, degraded: false };
 }
