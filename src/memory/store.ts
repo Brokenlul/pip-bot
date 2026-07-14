@@ -39,6 +39,7 @@ export async function ensureGuild(guildId: string, guildName?: string): Promise<
 
 export async function lookupCache(
   guildId: string,
+  userId: string,
   question: string,
 ): Promise<CachedAnswer | null> {
   const db = getDb();
@@ -53,8 +54,14 @@ export async function lookupCache(
     console.warn(`[memory] embed failed during cache lookup: ${(e as Error).message}`);
     return null;
   }
+  // Scoped to (guild_id, user_id) — a cache hit must be THIS user's own prior
+  // answer, never another trader's in the same server. Closes a real
+  // cross-user contamination path: one user's answer (possibly shaped by
+  // something false they asserted) could otherwise be served to someone else
+  // asking a semantically similar question minutes later.
   const { data, error } = await db.rpc('match_semantic_cache', {
     p_guild_id: guildId,
+    p_user_id: userId,
     p_question_embedding: vec,
     p_min_similarity: cfg.SEMANTIC_CACHE_SIMILARITY,
     p_ttl_seconds: cfg.SEMANTIC_CACHE_TTL_SECONDS,
@@ -116,6 +123,7 @@ export async function persistQA(opts: {
       .from('semantic_cache')
       .insert({
         guild_id: opts.guildId,
+        user_id: opts.userId,
         question: opts.question,
         question_embedding: vec,
         answer: opts.answer,
