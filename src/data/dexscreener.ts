@@ -74,10 +74,22 @@ export const dexScreenerTool: Tool<Input, Output> = {
         const data = (await res.json()) as { pairs?: DsPair[] };
         const pairs = data.pairs ?? [];
         if (pairs.length === 0) throw new Error(`No DEX pairs found for "${q}"`);
-        // Pick the deepest-liquidity pair — most representative price.
-        const best = pairs.reduce((a, b) =>
-          (b.liquidity?.usd ?? 0) > (a.liquidity?.usd ?? 0) ? b : a,
-        );
+        // A name search on a popular ticker is thick with copycat/scam pairs —
+        // some report huge nominal liquidity with near-zero real trading (a
+        // seeded decoy pool, e.g. $76M liquidity / $0.01 24h volume), others
+        // report leftover/stale volume against a pool that's since been
+        // drained to ~$0 liquidity. Liquidity-only or volume-only tie-breaks
+        // each fall for one of those. Require a liquidity floor first (a dead
+        // pool doesn't get to win on stale volume), then rank the survivors by
+        // volume — real trading activity is the harder signal to fake cheaply
+        // and is what "most active/most popular" actually means.
+        const MIN_LIQUIDITY_USD = 1000;
+        const viable = pairs.filter((p) => (p.liquidity?.usd ?? 0) >= MIN_LIQUIDITY_USD);
+        const pool = viable.length > 0 ? viable : pairs;
+        const best = pool.slice().sort((a, b) => {
+          const volDiff = (b.volume?.h24 ?? 0) - (a.volume?.h24 ?? 0);
+          return volDiff !== 0 ? volDiff : (b.liquidity?.usd ?? 0) - (a.liquidity?.usd ?? 0);
+        })[0]!;
         return {
           symbol: best.baseToken.symbol,
           name: best.baseToken.name,
