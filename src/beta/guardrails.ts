@@ -475,19 +475,26 @@ export async function betaGate(msg: NormalizedMessage): Promise<GateDecision> {
     }
   }
 
-  // 6. Per-user daily message cap.
+  // 6/6b/7. Per-user daily message cap, spend cap, and feature budgets — all
+  // exempted for the founder's own account. These bound a TESTER's usage;
+  // dogfooding the product on your own account isn't the thing they exist to
+  // stop, and the global kill-switch + per-guild cap above still bound
+  // runaway cost even for the founder. Founder is already excluded from
+  // pilot metrics the same way (dashboard) — this mirrors that.
+  const isFounder = Boolean(cfg.FOUNDER_DISCORD_ID) && msg.userId === cfg.FOUNDER_DISCORD_ID;
   const mine = rows.filter((r) => r.user_id === msg.userId);
-  if (mine.length >= cfg.BETA_USER_DAILY_MSGS) {
-    return blocked("You've hit today's beta limit — resets at midnight UTC. This keeps the beta free for everyone 🌱");
+
+  if (!isFounder) {
+    if (mine.length >= cfg.BETA_USER_DAILY_MSGS) {
+      return blocked("You've hit today's beta limit — resets at midnight UTC. This keeps the beta free for everyone 🌱");
+    }
+    const mySpend = mine.reduce((s, r) => s + Number(r.cost_usd), 0);
+    if (mySpend >= cfg.BETA_USER_DAILY_SPEND_USD) {
+      return blocked("You've used today's Pip budget — it resets at midnight UTC 🌱");
+    }
   }
 
-  // 6b. Per-user daily spend cap ($) — follows the user across guilds and DMs.
-  const mySpend = mine.reduce((s, r) => s + Number(r.cost_usd), 0);
-  if (mySpend >= cfg.BETA_USER_DAILY_SPEND_USD) {
-    return blocked("You've used today's Pip budget — it resets at midnight UTC 🌱");
-  }
-
-  // 7. Degrade mode + per-user feature budgets.
+  // Degrade mode + per-user feature budgets.
   const degraded = globalSpend >= spendCap * CAPS.degradeAtFraction;
   const mySearches = mine.reduce((s, r) => s + (r.web_searches ?? 0), 0);
   const myVision = mine.filter((r) => r.had_vision).length;
@@ -498,9 +505,9 @@ export async function betaGate(msg: NormalizedMessage): Promise<GateDecision> {
     allow: true,
     degraded,
     features: {
-      web: !degraded && mySearches < CAPS.perUser.webSearches,
-      vision: !degraded && myVision < CAPS.perUser.vision,
-      scan: myScans < CAPS.perUser.scans,
+      web: isFounder || (!degraded && mySearches < CAPS.perUser.webSearches),
+      vision: isFounder || (!degraded && myVision < CAPS.perUser.vision),
+      scan: isFounder || myScans < CAPS.perUser.scans,
     },
   };
 }
