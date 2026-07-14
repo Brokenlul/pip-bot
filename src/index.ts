@@ -11,6 +11,7 @@ import {
   telegramEnabled,
 } from './config.js';
 import { renderReplyText } from './core/formatter.js';
+import { startAlertPoller } from './core/alert-poller.js';
 
 async function main(): Promise<void> {
   // Validate config at boot
@@ -54,6 +55,9 @@ async function main(): Promise<void> {
     throw new Error('No chat platform enabled — set Discord or Telegram credentials in .env.');
   }
   await Promise.all(adapters.map((a) => a.start(handle)));
+  // Push price alerts (set_price_alert) — only meaningful once at least one
+  // adapter has registered its pusher, which happens synchronously in start().
+  if (memoryEnabled()) startAlertPoller();
 
   const shutdown = async (sig: NodeJS.Signals) => {
     console.log(`[pip] received ${sig}, draining ${inFlight.size} in-flight answer(s)`);

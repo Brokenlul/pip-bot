@@ -20,7 +20,7 @@ export const CAPS = {
   perRequest: {
     maxToolCalls: 5, // stop runaway agent fan-out
     maxLoopTurns: 3, // #1 silent cost bug: runaway loops
-    maxTokens: 700, // answers are chat-sized by design
+    maxTokens: 1100, // bumped from 700 (2026-07-13) — sectioned deep reads were truncating mid-section, e.g. a bare header with no content under it
     degradeMaxTokens: 400, // even tighter once degraded
   },
 } as const;

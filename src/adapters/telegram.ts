@@ -10,6 +10,7 @@ import {
 } from './platform.js';
 import { betaGate, recordFeedback } from '../beta/guardrails.js';
 import { renderReplyText } from '../core/formatter.js';
+import { registerPusher } from '../core/push.js';
 
 // Telegram feedback reactions → rating (mirrors the Discord map).
 const TG_RATING: Record<string, 'up' | 'down'> = {
@@ -66,6 +67,11 @@ export class TelegramAdapter implements PlatformAdapter {
     const bot = new Bot(token);
     this.bot = bot;
 
+    // Price-alert pushes (src/core/alert-poller.ts). Telegram lets a bot DM any
+    // user who has ever started a chat with it — no session-window restriction
+    // — so this works for any user an alert could exist for.
+    registerPusher('telegram', (userId, text) => this.pushUser(userId, text));
+
     bot.on('message', (ctx) => {
       this.handleMessage(ctx).catch((e) => {
         console.error('[telegram] message handler crashed:', e);
@@ -108,6 +114,11 @@ export class TelegramAdapter implements PlatformAdapter {
   async stop(): Promise<void> {
     await this.bot?.stop();
     this.bot = null;
+  }
+
+  /** Push a DM to a user id (price alerts). Throws on failure — caller decides. */
+  private async pushUser(userId: string, text: string): Promise<void> {
+    await this.bot!.api.sendMessage(Number(userId), text);
   }
 
   private async handleMessage(ctx: Context): Promise<void> {

@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { Tool, ToolContext, zValidator } from './registry.js';
 import { recentQuestions } from '../memory/store.js';
+import { extractStats } from '../core/formatter.js';
 
 /**
  * Lets Claude answer "what have we asked about lately" from per-guild memory.
@@ -33,11 +34,19 @@ export const recentQuestionsTool: Tool<Input, Output> = {
     const items = await recentQuestions(ctx.guildId, input.limit ?? 8, ctx.userId);
     return {
       count: items.length,
-      recent: items.map((i) => ({
-        question: i.question,
-        answered: i.answer.length > 240 ? `${i.answer.slice(0, 240)}…` : i.answer,
-        asked_at_iso: i.askedAt.toISOString(),
-      })),
+      recent: items.map((i) => {
+        // Flatten a stored [[STATS]] block back to plain "Label: value" text —
+        // this feeds back into the model as tool JSON, not a rendered embed.
+        const { fields, body } = extractStats(i.answer);
+        const flat = fields.length
+          ? `${fields.map((f) => `${f.name}: ${f.value}`).join(', ')}. ${body}`
+          : body;
+        return {
+          question: i.question,
+          answered: flat.length > 240 ? `${flat.slice(0, 240)}…` : flat,
+          asked_at_iso: i.askedAt.toISOString(),
+        };
+      }),
     };
   },
   citation: () => ({ label: 'Server memory' }),

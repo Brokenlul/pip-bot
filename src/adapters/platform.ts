@@ -50,6 +50,16 @@ export interface NormalizedAttachment {
   data: Buffer;
 }
 
+/**
+ * One label/value pair parsed from a legacy `[[STATS]]` block. Replies no
+ * longer carry fields (the body is one sectioned text block on all platforms);
+ * memory recall still uses this to flatten stored pre-sectioned answers.
+ */
+export interface ReplyField {
+  name: string;
+  value: string;
+}
+
 export interface NormalizedReply {
   title?: string;
   body: string;

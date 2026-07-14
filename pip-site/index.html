@@ -1,0 +1,726 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>pip: Your AI Market Analyst</title>
+<meta name="description" content="An edge comes from small, precise, verifiable facts, delivered the moment you ask. pip is an AI market analyst for your Discord or Telegram community.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --cream: #F2F7EE;
+    --ink: #08160F;
+    --muted: #5C6E63;
+    --green: #12A15A;
+    --green-bright: #1FBE6C;
+    --mint: #7FE3A6;
+    --border: #D8E6D3;
+    --forest: #0E3B26;
+    --clay: #C25B37;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; background: var(--cream); overflow-x: hidden; }
+  body { font-family: 'Geist', system-ui, sans-serif; color: var(--ink); -webkit-font-smoothing: antialiased; }
+  ::selection { background: var(--green); color: var(--cream); }
+  a { -webkit-tap-highlight-color: transparent; }
+  .mono { font-family: 'Geist Mono', ui-monospace, monospace; }
+
+  @keyframes pipPulse {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(31,190,108,0.45); opacity: 1; }
+    50% { box-shadow: 0 0 0 6px rgba(31,190,108,0); opacity: 0.85; }
+  }
+  @keyframes pipGlow {
+    0%, 100% { opacity: 0.55; }
+    50% { opacity: 1; }
+  }
+  @keyframes caretBlink {
+    0%, 49% { opacity: 1; }
+    50%, 100% { opacity: 0; }
+  }
+  @keyframes strokeDraw {
+    from { stroke-dashoffset: 300; }
+    to { stroke-dashoffset: 0; }
+  }
+  @keyframes fadeUp {
+    from { opacity: 0; transform: translateY(14px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation: none !important; transition: none !important; }
+  }
+
+  /* hover states (no framework, plain CSS) */
+  .nav-link { color: var(--muted); text-decoration: none; }
+  .nav-link:hover { color: var(--ink); }
+  .social-icon { display: flex; align-items: center; justify-content: center; width: 30px; height: 30px; border-radius: 50%; color: var(--muted); text-decoration: none; transition: background 200ms ease-out, color 200ms ease-out; }
+  .social-icon:hover { background: var(--cream); color: var(--green); }
+  .btn-primary { background: var(--green); color: #FFFFFF; text-decoration: none; font-size: 15px; font-weight: 500; padding: 13px 26px; border-radius: 10px; transition: background 200ms ease-out; display: inline-block; }
+  .btn-primary:hover { background: var(--green-bright); }
+  .btn-secondary { background: transparent; color: var(--ink); border: 1px solid var(--border); text-decoration: none; font-size: 15px; font-weight: 500; padding: 12px 26px; border-radius: 10px; transition: border-color 200ms ease-out, color 200ms ease-out; display: inline-block; }
+  .btn-secondary:hover { border-color: var(--green); color: var(--green); }
+  .btn-secondary-dark { background: transparent; color: var(--cream); border: 1px solid rgba(127,227,166,0.4); text-decoration: none; font-size: 15px; font-weight: 500; padding: 12px 26px; border-radius: 10px; transition: border-color 200ms ease-out; display: inline-block; }
+  .btn-secondary-dark:hover { border-color: var(--mint); }
+  .chip { border: 1px solid var(--border); background: #FFFFFF; color: var(--ink); border-radius: 999px; padding: 7px 15px; transition: border-color 200ms ease-out; }
+  .chip:hover { border-color: var(--green); }
+  .feature-card { background: #FFFFFF; border: 1px solid var(--border); border-radius: 16px; padding: 28px; display: flex; flex-direction: column; gap: 14px; transition: box-shadow 220ms ease-out, transform 220ms ease-out; }
+  .feature-card:hover { box-shadow: 0 16px 40px -16px rgba(18,161,90,0.25); transform: translateY(-2px); }
+  .demo-card { border-radius: 16px; padding: 26px; display: flex; flex-direction: column; gap: 18px; transition: box-shadow 220ms ease-out; }
+  .demo-card:hover { box-shadow: 0 16px 40px -16px rgba(18,161,90,0.25); }
+  .footer-link { color: rgba(242,247,238,0.5); text-decoration: none; }
+  .footer-link:hover { color: var(--mint); }
+  .plans-link { font-family: 'Geist Mono', ui-monospace, monospace; font-size: 13px; color: var(--green); text-decoration: none; }
+  .plans-link:hover { color: var(--green-bright); }
+
+  .pip-logo { text-decoration: none; color: var(--ink); display: flex; align-items: baseline; font-weight: 600; letter-spacing: -0.02em; line-height: 1; }
+  .pip-dot { position: relative; display: inline-block; }
+  .pip-dot span { position: absolute; border-radius: 50%; background: var(--green); box-shadow: 0 0 8px 2px rgba(127,227,166,0.7); animation: pipPulse 2.4s ease-out infinite; }
+
+  nav .nav-links { display: flex; align-items: center; gap: 28px; font-size: 14px; color: var(--muted); }
+  @media (max-width: 720px) {
+    nav .nav-links { display: none; }
+  }
+
+  .nav-toggle { display: none; align-items: center; justify-content: center; width: 32px; height: 32px; border-radius: 50%; border: none; background: transparent; color: var(--ink); cursor: pointer; flex-shrink: 0; }
+  @media (max-width: 720px) {
+    .nav-toggle { display: flex; }
+  }
+  .nav-dropdown { display: none; position: absolute; top: 64px; left: 50%; transform: translateX(-50%); width: calc(100% - 48px); max-width: 320px; background: #FFFFFF; border: 1px solid var(--border); border-radius: 16px; box-shadow: 0 12px 40px -12px rgba(14,59,38,0.25), 0 2px 8px rgba(8,22,15,0.05); padding: 10px; flex-direction: column; gap: 2px; z-index: 49; }
+  .nav-dropdown:not(.hidden) { display: flex; }
+  .nav-dropdown-link { color: var(--ink); text-decoration: none; font-size: 15px; padding: 10px 14px; border-radius: 10px; transition: background 150ms ease-out; }
+  .nav-dropdown-link:hover { background: var(--cream); }
+
+  /* mobile spacing */
+  @media (max-width: 640px) {
+    .pad-x { padding-left: 20px !important; padding-right: 20px !important; }
+    header#top { padding-top: 96px !important; padding-bottom: 80px !important; }
+    #what { padding-bottom: 90px !important; }
+    #memory { padding-top: 72px !important; padding-bottom: 72px !important; }
+    .see-it-answer { padding-top: 90px !important; padding-bottom: 90px !important; }
+    .closing-cta { padding-top: 80px !important; padding-bottom: 40px !important; }
+    .feature-card, .pricing-card, .checkout-modal { padding: 24px !important; }
+  }
+
+  .hidden { display: none !important; }
+
+  .seg-group { display: inline-flex; background: #EAF1E4; border: 1px solid var(--border); border-radius: 999px; padding: 4px; }
+  .seg-btn { font-family: 'Geist', system-ui, sans-serif; font-size: 14px; font-weight: 500; padding: 8px 18px; border-radius: 999px; border: none; cursor: pointer; white-space: nowrap; background: transparent; color: var(--muted); transition: background 200ms ease-out, color 200ms ease-out; }
+  .seg-btn.active { background: #FFFFFF; color: var(--ink); box-shadow: 0 2px 8px rgba(8,22,15,0.08); }
+
+  .pricing-card { position: relative; background: #FFFFFF; border: 1px solid var(--border); border-radius: 18px; padding: 34px; display: flex; flex-direction: column; gap: 16px; box-shadow: 0 12px 32px -20px rgba(14,59,38,0.18); transition: transform 200ms ease-out, box-shadow 200ms ease-out; }
+  .pricing-card.popular { border: 1.5px solid var(--green); box-shadow: 0 24px 56px -22px rgba(18,161,90,0.35); transform: scale(1.03); }
+  @media (max-width: 900px) { .pricing-card.popular { transform: none; } }
+  .pricing-cta { text-align: center; text-decoration: none; font-size: 15px; font-weight: 500; border-radius: 10px; transition: background 200ms ease-out, border-color 200ms ease-out, color 200ms ease-out; display: block; cursor: pointer; }
+  .pricing-cta.filled { background: var(--green); color: #FFFFFF; padding: 13px 24px; border: 1.5px solid var(--green); }
+  .pricing-cta.filled:hover { background: var(--green-bright); border-color: var(--green-bright); }
+  .pricing-cta.outline { background: transparent; color: var(--ink); padding: 12px 24px; border: 1px solid var(--border); }
+  .pricing-cta.outline:hover { border-color: var(--green); color: var(--green); }
+
+  .checkout-overlay { position: fixed; inset: 0; z-index: 100; background: rgba(8,22,15,0.5); backdrop-filter: blur(4px); -webkit-backdrop-filter: blur(4px); display: flex; align-items: center; justify-content: center; padding: 24px; animation: fadeUp 220ms ease-out both; }
+  .checkout-modal { width: 100%; max-width: 420px; background: #FFFFFF; border: 1px solid var(--border); border-radius: 20px; box-shadow: 0 32px 80px -24px rgba(8,22,15,0.5); padding: 32px; display: flex; flex-direction: column; gap: 20px; }
+  .checkout-input { font-family: 'Geist', system-ui, sans-serif; font-size: 15px; color: var(--ink); padding: 11px 14px; border: 1px solid var(--border); border-radius: 10px; outline: none; background: #FFFFFF; width: 100%; transition: border-color 150ms ease-out; }
+  .checkout-input:focus { border-color: var(--green); }
+  .checkout-close { flex-shrink: 0; width: 32px; height: 32px; border-radius: 50%; border: 1px solid var(--border); background: var(--cream); color: var(--muted); font-size: 16px; line-height: 1; cursor: pointer; transition: background 200ms ease-out; }
+  .checkout-close:hover { background: #EAF1E4; }
+  .checkout-submit { background: var(--green); color: #FFFFFF; border: none; font-family: 'Geist', system-ui, sans-serif; font-size: 15px; font-weight: 500; padding: 14px; border-radius: 10px; cursor: pointer; transition: background 200ms ease-out; width: 100%; }
+  .checkout-submit:hover { background: var(--green-bright); }
+
+  .hero-anim-1 { animation: fadeUp 500ms ease-out both; }
+  .hero-anim-2 { animation: fadeUp 500ms ease-out 80ms both; }
+  .hero-anim-3 { animation: fadeUp 500ms ease-out 160ms both; }
+  .hero-anim-4 { animation: fadeUp 500ms ease-out 240ms both; }
+  .hero-anim-5 { animation: fadeUp 500ms ease-out 320ms both; }
+</style>
+</head>
+<body>
+
+<div style="min-height: 100vh;">
+
+  <!-- ============ NAV (floating pill) ============ -->
+  <nav style="position: sticky; top: 16px; z-index: 50; display: flex; justify-content: center; padding: 0 24px;">
+    <div style="background: rgba(255,255,255,0.92); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); border: 1px solid rgba(216,230,211,0.7); border-radius: 999px; box-shadow: 0 12px 40px -12px rgba(14,59,38,0.25), 0 2px 8px rgba(8,22,15,0.05); padding: 8px 8px 8px 24px; height: 56px; display: flex; align-items: center; gap: 28px;">
+      <a href="#top" class="pip-logo" style="font-size: 22px;">p<span class="pip-dot">ı<span style="top: 1px; left: 50%; transform: translateX(-50%); width: 5px; height: 5px;"></span></span>p</a>
+      <div class="nav-links">
+        <a href="#what" class="nav-link">Product</a>
+        <a href="#memory" class="nav-link">How it works</a>
+        <a href="#pricing" class="nav-link">Pricing</a>
+        <a href="#" class="nav-link">Blog</a>
+        <a href="#" class="nav-link">Docs</a>
+      </div>
+      <div style="width: 1px; height: 20px; background: var(--border);"></div>
+      <div style="display: flex; align-items: center; gap: 6px;">
+        <a href="#" title="Discord" class="social-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M19.27 5.33A18.27 18.27 0 0 0 14.5 3.8a.07.07 0 0 0-.08.04c-.2.36-.43.83-.59 1.2a16.9 16.9 0 0 0-5.66 0 12 12 0 0 0-.6-1.2.08.08 0 0 0-.08-.04A18.2 18.2 0 0 0 2.72 5.33a.07.07 0 0 0-.03.03C.35 8.9-.21 12.36.07 15.79a.08.08 0 0 0 .03.05 18.4 18.4 0 0 0 5.53 2.8.08.08 0 0 0 .08-.03c.43-.58.8-1.2 1.13-1.84a.07.07 0 0 0-.04-.1 12.1 12.1 0 0 1-1.73-.83.08.08 0 0 1-.01-.13c.12-.09.23-.18.34-.27a.07.07 0 0 1 .08-.01c3.63 1.66 7.56 1.66 11.15 0a.07.07 0 0 1 .08.01c.11.09.22.18.34.27a.08.08 0 0 1-.01.13c-.55.32-1.13.6-1.73.83a.08.08 0 0 0-.04.1c.34.64.71 1.26 1.13 1.84a.07.07 0 0 0 .08.03 18.3 18.3 0 0 0 5.54-2.8.08.08 0 0 0 .03-.05c.33-3.97-.55-7.4-2.32-10.43a.06.06 0 0 0-.03-.03ZM8.02 13.74c-1.09 0-1.99-1-1.99-2.23 0-1.22.88-2.23 1.99-2.23 1.12 0 2.01 1.02 1.99 2.23 0 1.23-.87 2.23-1.99 2.23Zm7.15 0c-1.09 0-1.99-1-1.99-2.23 0-1.22.88-2.23 1.99-2.23 1.12 0 2 1.02 1.99 2.23 0 1.23-.87 2.23-1.99 2.23Z" fill="currentColor"/></svg></a>
+        <a href="#" title="Telegram" class="social-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M21.05 3.35 2.7 10.42c-1.25.5-1.24 1.18-.23 1.49l4.7 1.47 1.8 5.53c.22.6.37.84.75.84.3 0 .43-.13.6-.3l1.65-1.6 3.42 2.53c.63.35 1.08.17 1.24-.58l2.24-10.55c.24-1.02-.4-1.48-1.02-1.9Zm-12.86 8.9-1.9-.6L18.4 6.1c.32-.19.62-.09.37.12L8.19 12.25Zm.6 4.16-.72-2.31 8.63-5.4c.28-.17.53-.08.32.11l-6.84 6.14-.55 1.83-.84 0Z" fill="currentColor"/></svg></a>
+        <a href="#" title="X" class="social-icon"><svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M14.28 10.16 22.98 0h-2.06l-7.55 8.82L7.34 0H.5l9.13 13.34L.5 24h2.06l7.98-9.32L17.16 24h6.84l-9.72-13.84Zm-2.82 3.3-.92-1.32L3.56 1.56h3.17l5.94 8.5.92 1.31 7.72 11.05h-3.17l-6.3-9Z" fill="currentColor"/></svg></a>
+      </div>
+      <button type="button" id="nav-toggle" class="nav-toggle" aria-label="Toggle menu" aria-expanded="false">
+        <svg width="18" height="18" viewBox="0 0 18 18" fill="none"><path d="M2 5h14M2 9h14M2 13h14" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+      </button>
+    </div>
+    <div id="nav-dropdown" class="nav-dropdown hidden">
+      <a href="#what" class="nav-dropdown-link">Product</a>
+      <a href="#memory" class="nav-dropdown-link">How it works</a>
+      <a href="#pricing" class="nav-dropdown-link">Pricing</a>
+      <a href="#" class="nav-dropdown-link">Blog</a>
+      <a href="#" class="nav-dropdown-link">Docs</a>
+    </div>
+  </nav>
+
+  <!-- ============ HERO ============ -->
+  <header id="top" class="pad-x" style="position: relative; margin-top: -72px; min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 140px 32px 140px; overflow: hidden;">
+    <img src="assets/hero-bg.jpg" alt="" style="position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; object-position: center top; z-index: 0;">
+    <div style="position: absolute; left: 50%; top: 42%; transform: translate(-50%, -50%); width: 1100px; height: 640px; max-width: 100%; border-radius: 50%; background: radial-gradient(ellipse at center, rgba(242,247,238,0.85) 0%, rgba(242,247,238,0.45) 45%, rgba(242,247,238,0) 72%); z-index: 1; pointer-events: none;"></div>
+    <div style="position: absolute; left: 0; right: 0; bottom: 0; height: 180px; background: linear-gradient(to bottom, rgba(242,247,238,0) 0%, var(--cream) 100%); z-index: 1; pointer-events: none;"></div>
+    <div style="position: relative; z-index: 2; max-width: 880px; display: flex; flex-direction: column; align-items: center; text-align: center; gap: 0;">
+      <div class="mono hero-anim-1" style="font-size: 13px; letter-spacing: 0.14em; color: var(--green);">⟩ AI MARKET ANALYST</div>
+      <h1 class="hero-anim-2" style="margin: 28px 0 0; font-size: clamp(52px, 8.5vw, 96px); line-height: 1.02; letter-spacing: -0.035em; font-weight: 600; text-wrap: balance;">Your AI Market <em style="font-style: italic; color: var(--green); font-weight: 500;">Analyst</em>.</h1>
+      <p class="hero-anim-3" style="margin: 28px 0 0; max-width: 560px; font-size: 19px; line-height: 1.55; color: var(--muted); text-wrap: pretty;">An edge comes from small, precise, verifiable facts, delivered the moment you ask.</p>
+
+      <div class="hero-anim-4" style="margin-top: 52px; width: 100%; max-width: 640px; background: #FFFFFF; border: 1px solid var(--border); border-radius: 14px; padding: 18px 22px; display: flex; align-items: center; gap: 14px; box-shadow: 0 12px 40px -12px rgba(18,161,90,0.18), 0 2px 8px rgba(8,22,15,0.04); text-align: left;">
+        <span style="flex: none; width: 10px; height: 10px; border-radius: 50%; background: var(--green); box-shadow: 0 0 10px 2px rgba(127,227,166,0.6); animation: pipPulse 2.4s ease-out infinite;"></span>
+        <div class="mono" style="font-size: 15px; line-height: 1.5; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis;"><span style="color: var(--green); font-weight: 600;">@pip</span> <span id="pip-typed-text" style="color: var(--ink);"></span><span style="display: inline-block; width: 8px; height: 17px; background: var(--green); margin-left: 2px; vertical-align: text-bottom; animation: caretBlink 1s step-end infinite;"></span></div>
+      </div>
+
+      <div class="hero-anim-5" style="margin-top: 32px; display: flex; gap: 12px; flex-wrap: wrap; justify-content: center;">
+        <a href="#" class="btn-primary">Add to Discord</a>
+        <a href="#" class="btn-secondary">Add to Telegram</a>
+      </div>
+
+    </div>
+  </header>
+
+  <!-- ============ ASKS ANYTHING ============ -->
+  <section class="pad-x" style="padding: 0 32px 120px;">
+    <div style="max-width: 880px; margin: 0 auto; display: flex; flex-direction: column; align-items: center; gap: 24px; text-align: center;">
+      <div class="mono" style="font-size: 13px; letter-spacing: 0.14em; color: var(--green);">⟩ ASKS ANYTHING</div>
+      <p style="margin: 0; font-size: 17px; color: var(--muted); max-width: 520px;">One analyst, the whole market. If it trades, or moves what trades, PIP covers it.</p>
+      <div class="mono" style="display: flex; flex-wrap: wrap; justify-content: center; gap: 10px; font-size: 13px;">
+        <span class="chip">Equities</span>
+        <span class="chip">Crypto</span>
+        <span class="chip">Perps</span>
+        <span class="chip">Funding</span>
+        <span class="chip">Open Interest</span>
+        <span class="chip">Fed dates</span>
+        <span class="chip">Hyperliquid</span>
+        <span class="chip">Macro</span>
+        <span class="chip">…the latest shitcoin</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ WHAT IT DOES ============ -->
+  <section id="what" class="pad-x" style="padding: 0 32px 140px;">
+    <div style="max-width: 1120px; margin: 0 auto;">
+      <div class="mono" style="font-size: 13px; letter-spacing: 0.14em; color: var(--green);">⟩ WHAT IT DOES</div>
+      <h2 style="margin: 20px 0 56px; font-size: clamp(32px, 4.5vw, 48px); letter-spacing: -0.03em; font-weight: 600; line-height: 1.1; max-width: 640px;">An analyst, <em style="font-style: italic; color: var(--green); font-weight: 500;">not</em> a guru.</h2>
+      <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(min(240px, 100%), 1fr)); gap: 20px;">
+
+        <!-- 01 GROUNDED -->
+        <div class="feature-card">
+          <div class="mono" style="font-size: 11px; letter-spacing: 0.12em; color: var(--muted);">01 · GROUNDED</div>
+          <div style="font-size: 20px; font-weight: 600; letter-spacing: -0.02em; line-height: 1.25;">Grounded, not guessing</div>
+          <p style="margin: 0; font-size: 14px; line-height: 1.55; color: var(--muted); flex: 1;">Every answer is built on live market, macro & derivatives data, pulled the moment you ask.</p>
+          <div>
+            <div class="mono" style="background: var(--ink); border-radius: 10px; padding: 10px 12px; display: flex; flex-direction: column; gap: 6px; font-size: 11px;">
+              <div style="display: flex; align-items: center; gap: 8px; opacity: 1;">
+                <div style="width: 5px; height: 5px; border-radius: 50%; background: var(--green-bright); flex-shrink: 0; animation: pipGlow 2.2s ease-in-out infinite; animation-delay: 0s;"></div>
+                <span style="color: var(--cream); flex-shrink: 0;">BTC</span>
+                <span style="color: var(--muted); flex: 1;">$67,412</span>
+                <span style="color: var(--green-bright);">+1.8%</span>
+              </div>
+              <div style="display: flex; align-items: center; gap: 8px; opacity: 0.85;">
+                <div style="width: 5px; height: 5px; border-radius: 50%; background: var(--green-bright); flex-shrink: 0; animation: pipGlow 2.2s ease-in-out infinite; animation-delay: 0.3s;"></div>
+                <span style="color: var(--cream); flex-shrink: 0;">ETH</span>
+                <span style="color: var(--muted); flex: 1;">$3,502</span>
+                <span style="color: var(--clay);">-0.4%</span>
+              </div>
+              <div style="display: flex; align-items: center; gap: 8px; opacity: 0.6;">
+                <div style="width: 5px; height: 5px; border-radius: 50%; background: var(--green-bright); flex-shrink: 0; animation: pipGlow 2.2s ease-in-out infinite; animation-delay: 0.6s;"></div>
+                <span style="color: var(--cream); flex-shrink: 0;">SOL</span>
+                <span style="color: var(--muted); flex: 1;">$178.20</span>
+                <span style="color: var(--green-bright);">+4.1%</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 02 CITED -->
+        <div class="feature-card">
+          <div class="mono" style="font-size: 11px; letter-spacing: 0.12em; color: var(--muted);">02 · CITED</div>
+          <div style="font-size: 20px; font-weight: 600; letter-spacing: -0.02em; line-height: 1.25;">Always cited</div>
+          <p style="margin: 0; font-size: 14px; line-height: 1.55; color: var(--muted); flex: 1;">Sources attached to every claim, with timestamps. Check the data yourself, any time.</p>
+          <div>
+            <svg width="100%" height="84" viewBox="0 0 200 84" fill="none" preserveAspectRatio="none" style="display: block; background: var(--cream); border-radius: 10px;">
+              <circle cx="16" cy="16" r="6" fill="none" stroke="var(--green)" stroke-width="1.4"></circle>
+              <path d="M13 16 l2 2.4 l4 -5" stroke="var(--green)" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" fill="none"></path>
+              <rect x="32" y="12.5" width="90" height="3" rx="1.5" fill="#08160F" fill-opacity="0.55"></rect>
+              <rect x="126" y="12.5" width="30" height="3" rx="1.5" fill="var(--green)" fill-opacity="0.4"></rect>
+
+              <circle cx="16" cy="40" r="6" fill="none" stroke="var(--green)" stroke-width="1.4"></circle>
+              <path d="M13 40 l2 2.4 l4 -5" stroke="var(--green)" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" fill="none"></path>
+              <rect x="32" y="36.5" width="66" height="3" rx="1.5" fill="#08160F" fill-opacity="0.55"></rect>
+              <rect x="102" y="36.5" width="30" height="3" rx="1.5" fill="var(--green)" fill-opacity="0.4"></rect>
+
+              <circle cx="16" cy="64" r="6" fill="none" stroke="var(--green)" stroke-width="1.4"></circle>
+              <path d="M13 64 l2 2.4 l4 -5" stroke="var(--green)" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" fill="none"></path>
+              <rect x="32" y="60.5" width="108" height="3" rx="1.5" fill="#08160F" fill-opacity="0.55"></rect>
+              <rect x="144" y="60.5" width="30" height="3" rx="1.5" fill="var(--green)" fill-opacity="0.4"></rect>
+            </svg>
+          </div>
+        </div>
+
+        <!-- 03 MEMORY -->
+        <div class="feature-card">
+          <div class="mono" style="font-size: 11px; letter-spacing: 0.12em; color: var(--muted);">03 · MEMORY</div>
+          <div style="font-size: 20px; font-weight: 600; letter-spacing: -0.02em; line-height: 1.25;">Community memory</div>
+          <p style="margin: 0; font-size: 14px; line-height: 1.55; color: var(--muted); flex: 1;">PIP remembers your server's watchlists and questions; answers get sharper over time.</p>
+          <div>
+            <svg width="100%" height="84" viewBox="0 0 200 84" fill="none" preserveAspectRatio="none" style="display: block; background: var(--cream); border-radius: 10px;">
+              <circle cx="14" cy="22" r="8" fill="var(--border)"></circle>
+              <path d="M28 14 h64 a8 8 0 0 1 8 8 v0 a8 8 0 0 1 -8 8 h-56 l-10 8 v-8 h-2 a8 8 0 0 1 -8 -8 v0 a8 8 0 0 1 8 -8 Z" fill="#FFFFFF" stroke="var(--border)" stroke-width="1"></path>
+              <rect x="38" y="19" width="46" height="3" rx="1.5" fill="var(--muted)" fill-opacity="0.5"></rect>
+              <rect x="38" y="27" width="30" height="3" rx="1.5" fill="var(--muted)" fill-opacity="0.35"></rect>
+              <circle cx="186" cy="58" r="8" fill="var(--green)" fill-opacity="0.25"></circle>
+              <path d="M172 50 h-64 a8 8 0 0 0 -8 8 v0 a8 8 0 0 0 8 8 h56 l10 8 v-8 h2 a8 8 0 0 0 8 -8 v0 a8 8 0 0 0 -8 -8 Z" fill="var(--green)" fill-opacity="0.12" stroke="var(--green)" stroke-opacity="0.35" stroke-width="1"></path>
+              <rect x="114" y="55" width="50" height="3" rx="1.5" fill="#0E3B26" fill-opacity="0.55"></rect>
+              <rect x="114" y="63" width="32" height="3" rx="1.5" fill="#0E3B26" fill-opacity="0.35"></rect>
+              <path d="M186 46 l1.8 3.6 l4 0.5 l-2.9 2.8 l0.7 4 l-3.6 -1.9 l-3.6 1.9 l0.7 -4 l-2.9 -2.8 l4 -0.5 Z" fill="var(--green-bright)" style="animation: pipGlow 2.4s ease-in-out infinite;"></path>
+            </svg>
+          </div>
+        </div>
+
+        <!-- 04 COVERAGE -->
+        <div class="feature-card">
+          <div class="mono" style="font-size: 11px; letter-spacing: 0.12em; color: var(--muted);">04 · COVERAGE</div>
+          <div style="font-size: 20px; font-weight: 600; letter-spacing: -0.02em; line-height: 1.25;">Everything, one @ away</div>
+          <p style="margin: 0; font-size: 14px; line-height: 1.55; color: var(--muted); flex: 1;">Equities to crypto to the latest shitcoin, one analyst covers the whole tape.</p>
+          <div>
+            <svg width="100%" height="84" viewBox="0 0 200 84" fill="none" preserveAspectRatio="none" style="display: block; background: var(--cream); border-radius: 10px;">
+              <rect x="6" y="8" width="56" height="20" rx="10" fill="#FFFFFF" stroke="var(--border)" stroke-width="1"></rect>
+              <circle cx="16" cy="18" r="2.5" fill="var(--green)"></circle>
+              <rect x="70" y="8" width="52" height="20" rx="10" fill="#FFFFFF" stroke="var(--border)" stroke-width="1"></rect>
+              <circle cx="80" cy="18" r="2.5" fill="var(--green)"></circle>
+              <rect x="130" y="8" width="64" height="20" rx="10" fill="#FFFFFF" stroke="var(--border)" stroke-width="1"></rect>
+              <circle cx="140" cy="18" r="2.5" fill="var(--green)"></circle>
+              <rect x="6" y="40" width="68" height="20" rx="10" fill="#FFFFFF" stroke="var(--border)" stroke-width="1"></rect>
+              <circle cx="16" cy="50" r="2.5" fill="var(--green)"></circle>
+              <rect x="82" y="40" width="50" height="20" rx="10" fill="#FFFFFF" stroke="var(--border)" stroke-width="1"></rect>
+              <circle cx="92" cy="50" r="2.5" fill="var(--green)"></circle>
+              <rect x="140" y="40" width="54" height="20" rx="10" fill="#FFFFFF" stroke="var(--border)" stroke-width="1"></rect>
+              <circle cx="150" cy="50" r="2.5" fill="var(--green)"></circle>
+            </svg>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ HOW MEMORY WORKS ============ -->
+  <section id="memory" class="pad-x" style="background: var(--forest); background-image: radial-gradient(rgba(127,227,166,0.13) 1px, transparent 1px); background-size: 26px 26px; padding: 110px 32px;">
+    <div style="max-width: 1120px; margin: 0 auto;">
+      <div class="mono" style="font-size: 13px; letter-spacing: 0.14em; color: var(--mint);">⟩ HOW MEMORY WORKS</div>
+      <h2 style="margin: 20px 0 72px; font-size: clamp(32px, 4.5vw, 48px); letter-spacing: -0.03em; font-weight: 600; line-height: 1.1; color: var(--cream); max-width: 640px;">Every question makes it <em style="font-style: italic; color: var(--mint); font-weight: 500;">sharper</em>.</h2>
+
+      <div style="position: relative; display: grid; grid-template-columns: repeat(auto-fit, minmax(min(260px, 100%), 1fr)); gap: 48px;">
+        <div style="position: absolute; top: 3px; left: 0; right: 0; height: 1px; background: rgba(127,227,166,0.25);"></div>
+
+        <!-- STEP 01 -->
+        <div style="position: relative; display: flex; flex-direction: column; gap: 16px; padding-top: 32px;">
+          <span style="position: absolute; top: 0; left: 0; width: 7px; height: 7px; border-radius: 50%; background: var(--mint); box-shadow: 0 0 10px 3px rgba(127,227,166,0.5);"></span>
+          <div class="mono" style="font-size: 12px; letter-spacing: 0.14em; color: var(--mint);">STEP 01</div>
+          <div style="font-size: 22px; font-weight: 600; letter-spacing: -0.02em; color: var(--cream);">Ask.</div>
+          <p style="margin: 0; font-size: 14px; line-height: 1.6; color: rgba(242,247,238,0.65); max-width: 300px;">Anyone in the server types a question. No dashboards, no setup: the chat is the interface.</p>
+          <div class="mono" style="align-self: flex-start; font-size: 13px; border: 1px solid rgba(127,227,166,0.35); border-radius: 999px; padding: 8px 16px; color: var(--cream);"><span style="color: var(--mint); font-weight: 600;">@pip</span> &lt;question&gt;</div>
+        </div>
+
+        <!-- STEP 02 -->
+        <div style="position: relative; display: flex; flex-direction: column; gap: 16px; padding-top: 32px;">
+          <span style="position: absolute; top: 0; left: 0; width: 7px; height: 7px; border-radius: 50%; background: var(--mint); box-shadow: 0 0 10px 3px rgba(127,227,166,0.5);"></span>
+          <div class="mono" style="font-size: 12px; letter-spacing: 0.14em; color: var(--mint);">STEP 02</div>
+          <div style="font-size: 22px; font-weight: 600; letter-spacing: -0.02em; color: var(--cream);">Grounds &amp; cites.</div>
+          <p style="margin: 0; font-size: 14px; line-height: 1.6; color: rgba(242,247,238,0.65); max-width: 300px;">PIP pulls live market, macro &amp; derivatives data and answers with sources attached.</p>
+          <div class="mono" style="display: flex; flex-wrap: wrap; gap: 8px; font-size: 12px;">
+            <span style="border: 1px solid rgba(127,227,166,0.3); border-radius: 999px; padding: 6px 12px; color: rgba(242,247,238,0.6);">funding <span style="color: var(--mint);">+0.011% / 8h</span></span>
+            <span style="border: 1px solid rgba(127,227,166,0.3); border-radius: 999px; padding: 6px 12px; color: rgba(242,247,238,0.6);"><span style="color: var(--mint);">▲ OI 3.2%</span></span>
+            <span style="display: inline-flex; align-items: center; gap: 6px; border: 1px solid rgba(127,227,166,0.3); border-radius: 999px; padding: 6px 12px; color: rgba(242,247,238,0.6);"><span style="width: 5px; height: 5px; border-radius: 50%; background: var(--mint);"></span>coinglass · 12s ago</span>
+          </div>
+        </div>
+
+        <!-- STEP 03 -->
+        <div style="position: relative; display: flex; flex-direction: column; gap: 16px; padding-top: 32px;">
+          <span style="position: absolute; top: 0; left: 0; width: 7px; height: 7px; border-radius: 50%; background: var(--mint); box-shadow: 0 0 10px 3px rgba(127,227,166,0.5); animation: pipPulse 2.4s ease-out infinite;"></span>
+          <div class="mono" style="font-size: 12px; letter-spacing: 0.14em; color: var(--mint);">STEP 03</div>
+          <div style="font-size: 22px; font-weight: 600; letter-spacing: -0.02em; color: var(--cream);">Remembers.</div>
+          <p style="margin: 0; font-size: 14px; line-height: 1.6; color: rgba(242,247,238,0.65); max-width: 300px;">Watchlists, tickers, and recurring questions become per-server memory; every answer gets more tailored over time.</p>
+          <svg width="190" height="80" viewBox="0 0 190 80" fill="none" style="display: block;">
+            <path d="M20 58 L70 22 M70 22 L128 44 M128 44 L170 16 M70 22 L118 8 M20 58 L128 44" stroke="var(--mint)" stroke-opacity="0.4" stroke-width="1" style="stroke-dasharray: 300; animation: strokeDraw 2s ease-out both;"></path>
+            <circle cx="20" cy="58" r="3" fill="var(--mint)" fill-opacity="0.5"></circle>
+            <circle cx="70" cy="22" r="3" fill="var(--mint)" fill-opacity="0.5"></circle>
+            <circle cx="118" cy="8" r="3" fill="var(--mint)" fill-opacity="0.5"></circle>
+            <circle cx="170" cy="16" r="3" fill="var(--mint)" fill-opacity="0.5"></circle>
+            <circle cx="128" cy="44" r="5" fill="var(--green-bright)" style="animation: pipGlow 2.4s ease-in-out infinite;"></circle>
+            <circle cx="128" cy="44" r="10" stroke="var(--mint)" stroke-opacity="0.4" stroke-width="1"></circle>
+          </svg>
+        </div>
+      </div>
+
+      <p style="margin: 72px 0 0; font-size: 15px; color: rgba(242,247,238,0.55); border-top: 1px solid rgba(127,227,166,0.18); padding-top: 28px;">Memory is per-server and compounds. <span style="color: var(--mint);">The more your community asks, the better PIP gets.</span></p>
+    </div>
+  </section>
+
+  <!-- ============ SEE IT ANSWER ============ -->
+  <section class="pad-x see-it-answer" style="padding: 140px 32px;">
+    <div style="max-width: 1120px; margin: 0 auto;">
+      <div class="mono" style="font-size: 13px; letter-spacing: 0.14em; color: var(--green);">⟩ SEE IT ANSWER</div>
+      <h2 style="margin: 20px 0 56px; font-size: clamp(32px, 4.5vw, 48px); letter-spacing: -0.03em; font-weight: 600; line-height: 1.1; max-width: 640px;">Real questions, <em style="font-style: italic; color: var(--green); font-weight: 500;">grounded</em> answers.</h2>
+
+      <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(min(300px, 100%), 1fr)); gap: 20px; align-items: start;">
+
+        <!-- demo 0 -->
+        <div class="demo-card" style="border: 1px solid var(--border); background: #FFFFFF;">
+          <div class="mono" style="font-size: 13.5px; line-height: 1.5; color: var(--muted);"><span style="color: var(--green); font-weight: 600;">@pip</span> funding on BTC perps right now?</div>
+          <div style="height: 1px; background: var(--border);"></div>
+          <div style="display: flex; align-items: center; gap: 10px;">
+            <span style="flex: none; width: 26px; height: 26px; border-radius: 7px; background: var(--forest); display: flex; align-items: center; justify-content: center;"><span style="width: 7px; height: 7px; border-radius: 50%; background: var(--green-bright); box-shadow: 0 0 8px 2px rgba(127,227,166,0.6);"></span></span>
+            <span style="font-weight: 600; font-size: 14px; color: var(--ink);">PIP</span>
+            <span class="mono" style="font-size: 10px; letter-spacing: 0.12em; color: var(--green); border: 1px solid var(--border); border-radius: 4px; padding: 3px 7px;">ANALYST</span>
+          </div>
+          <p style="margin: 0; font-size: 15px; line-height: 1.6; color: var(--ink); text-wrap: pretty;">Mildly positive: longs are paying shorts. Nothing extreme; positioning is leaning long but not crowded.</p>
+          <div class="mono" style="display: flex; flex-wrap: wrap; gap: 8px; font-size: 12px;">
+            <span style="border: 1px solid var(--border); border-radius: 999px; padding: 6px 12px; color: var(--muted);">funding <span style="color: var(--green);">+0.011% / 8h</span></span>
+            <span style="border: 1px solid var(--border); border-radius: 999px; padding: 6px 12px; color: var(--muted);"><span style="color: var(--green);">▲ OI 3.2%</span></span>
+            <span style="border: 1px solid var(--border); border-radius: 999px; padding: 6px 12px; color: var(--muted);">BTC <span style="color: var(--green);">$64,180</span></span>
+          </div>
+          <div class="mono" style="align-self: flex-start; display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; border: 1px solid var(--border); border-radius: 999px; padding: 5px 11px; color: var(--muted);"><span style="width: 5px; height: 5px; border-radius: 50%; background: var(--green);"></span>coinglass · 12s ago</div>
+        </div>
+
+        <!-- demo 1 (dark) -->
+        <div class="demo-card" style="border: 1px solid var(--forest); background: var(--forest);">
+          <div class="mono" style="font-size: 13.5px; line-height: 1.5; color: rgba(242,247,238,0.6);"><span style="color: var(--mint); font-weight: 600;">@pip</span> when's the next Fed decision?</div>
+          <div style="height: 1px; background: rgba(127,227,166,0.2);"></div>
+          <div style="display: flex; align-items: center; gap: 10px;">
+            <span style="flex: none; width: 26px; height: 26px; border-radius: 7px; background: rgba(127,227,166,0.12); display: flex; align-items: center; justify-content: center;"><span style="width: 7px; height: 7px; border-radius: 50%; background: var(--green-bright); box-shadow: 0 0 8px 2px rgba(127,227,166,0.6);"></span></span>
+            <span style="font-weight: 600; font-size: 14px; color: var(--cream);">PIP</span>
+            <span class="mono" style="font-size: 10px; letter-spacing: 0.12em; color: var(--mint); border: 1px solid rgba(127,227,166,0.35); border-radius: 4px; padding: 3px 7px;">ANALYST</span>
+          </div>
+          <p style="margin: 0; font-size: 15px; line-height: 1.6; color: var(--cream); text-wrap: pretty;">March 18: FOMC rate decision at 2:00 PM ET. Futures currently price a 97% probability of a hold.</p>
+          <div class="mono" style="display: flex; flex-wrap: wrap; gap: 8px; font-size: 12px;">
+            <span style="border: 1px solid rgba(127,227,166,0.3); border-radius: 999px; padding: 6px 12px; color: rgba(242,247,238,0.6);">next FOMC <span style="color: var(--mint);">Mar 18</span></span>
+            <span style="border: 1px solid rgba(127,227,166,0.3); border-radius: 999px; padding: 6px 12px; color: rgba(242,247,238,0.6);">hold odds <span style="color: var(--mint);">97%</span></span>
+          </div>
+          <div class="mono" style="align-self: flex-start; display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; border: 1px solid rgba(127,227,166,0.3); border-radius: 999px; padding: 5px 11px; color: rgba(242,247,238,0.6);"><span style="width: 5px; height: 5px; border-radius: 50%; background: var(--mint);"></span>cme fedwatch · 40s ago</div>
+        </div>
+
+        <!-- demo 2 -->
+        <div class="demo-card" style="border: 1px solid var(--border); background: #FFFFFF;">
+          <div class="mono" style="font-size: 13.5px; line-height: 1.5; color: var(--muted);"><span style="color: var(--green); font-weight: 600;">@pip</span> is $SOL overbought?</div>
+          <div style="height: 1px; background: var(--border);"></div>
+          <div style="display: flex; align-items: center; gap: 10px;">
+            <span style="flex: none; width: 26px; height: 26px; border-radius: 7px; background: var(--forest); display: flex; align-items: center; justify-content: center;"><span style="width: 7px; height: 7px; border-radius: 50%; background: var(--green-bright); box-shadow: 0 0 8px 2px rgba(127,227,166,0.6);"></span></span>
+            <span style="font-weight: 600; font-size: 14px; color: var(--ink);">PIP</span>
+            <span class="mono" style="font-size: 10px; letter-spacing: 0.12em; color: var(--green); border: 1px solid var(--border); border-radius: 4px; padding: 3px 7px;">ANALYST</span>
+          </div>
+          <p style="margin: 0; font-size: 15px; line-height: 1.6; color: var(--ink); text-wrap: pretty;">RSI is 71 on the 4H: stretched, not extreme. Funding is flat, so leverage isn't confirming a top. Not advice.</p>
+          <div class="mono" style="display: flex; flex-wrap: wrap; gap: 8px; font-size: 12px;">
+            <span style="border: 1px solid var(--border); border-radius: 999px; padding: 6px 12px; color: var(--muted);">RSI 4H <span style="color: var(--green);">71</span></span>
+            <span style="border: 1px solid var(--border); border-radius: 999px; padding: 6px 12px; color: var(--muted);">funding <span style="color: var(--green);">+0.004%</span></span>
+            <span style="border: 1px solid var(--border); border-radius: 999px; padding: 6px 12px; color: var(--muted);">SOL <span style="color: var(--green);">$148.20</span></span>
+          </div>
+          <div class="mono" style="align-self: flex-start; display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; border: 1px solid var(--border); border-radius: 999px; padding: 5px 11px; color: var(--muted);"><span style="width: 5px; height: 5px; border-radius: 50%; background: var(--green);"></span>binance · 8s ago</div>
+        </div>
+
+        <!-- demo 3 -->
+        <div class="demo-card" style="border: 1px solid var(--border); background: #FFFFFF;">
+          <div class="mono" style="font-size: 13.5px; line-height: 1.5; color: var(--muted);"><span style="color: var(--green); font-weight: 600;">@pip</span> what changed on our watchlist today?</div>
+          <div style="height: 1px; background: var(--border);"></div>
+          <div style="display: flex; align-items: center; gap: 10px;">
+            <span style="flex: none; width: 26px; height: 26px; border-radius: 7px; background: var(--forest); display: flex; align-items: center; justify-content: center;"><span style="width: 7px; height: 7px; border-radius: 50%; background: var(--green-bright); box-shadow: 0 0 8px 2px rgba(127,227,166,0.6);"></span></span>
+            <span style="font-weight: 600; font-size: 14px; color: var(--ink);">PIP</span>
+            <span class="mono" style="font-size: 10px; letter-spacing: 0.12em; color: var(--green); border: 1px solid var(--border); border-radius: 4px; padding: 3px 7px;">ANALYST</span>
+          </div>
+          <p style="margin: 0; font-size: 15px; line-height: 1.6; color: var(--ink); text-wrap: pretty;">Two moves worth noting: $TIA is up 6.1% since your last check, and ETH open interest just hit a 30-day high, which you asked me to flag.</p>
+          <div class="mono" style="display: flex; flex-wrap: wrap; gap: 8px; font-size: 12px;">
+            <span style="border: 1px solid var(--border); border-radius: 999px; padding: 6px 12px; color: var(--muted);">TIA <span style="color: var(--green);">▲ 6.1%</span></span>
+            <span style="border: 1px solid var(--border); border-radius: 999px; padding: 6px 12px; color: var(--muted);">ETH OI <span style="color: var(--green);">30d high</span></span>
+            <span style="border: 1px solid var(--border); border-radius: 999px; padding: 6px 12px; color: var(--muted);"><span style="color: var(--clay);">▼ FTM 2.3%</span></span>
+          </div>
+          <div class="mono" style="align-self: flex-start; display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; border: 1px solid var(--border); border-radius: 999px; padding: 5px 11px; color: var(--muted);"><span style="width: 5px; height: 5px; border-radius: 50%; background: var(--green);"></span>server memory · 4 tickers tracked</div>
+        </div>
+
+        <!-- demo 4 -->
+        <div class="demo-card" style="border: 1px solid var(--border); background: #FFFFFF;">
+          <div class="mono" style="font-size: 13.5px; line-height: 1.5; color: var(--muted);"><span style="color: var(--green); font-weight: 600;">@pip</span> how's ETH gas looking?</div>
+          <div style="height: 1px; background: var(--border);"></div>
+          <div style="display: flex; align-items: center; gap: 10px;">
+            <span style="flex: none; width: 26px; height: 26px; border-radius: 7px; background: var(--forest); display: flex; align-items: center; justify-content: center;"><span style="width: 7px; height: 7px; border-radius: 50%; background: var(--green-bright); box-shadow: 0 0 8px 2px rgba(127,227,166,0.6);"></span></span>
+            <span style="font-weight: 600; font-size: 14px; color: var(--ink);">PIP</span>
+            <span class="mono" style="font-size: 10px; letter-spacing: 0.12em; color: var(--green); border: 1px solid var(--border); border-radius: 4px; padding: 3px 7px;">ANALYST</span>
+          </div>
+          <p style="margin: 0; font-size: 15px; line-height: 1.6; color: var(--ink); text-wrap: pretty;">Base fee is sitting at 9 gwei, near the 30-day low. Good window for anything gas-sensitive.</p>
+          <div class="mono" style="display: flex; flex-wrap: wrap; gap: 8px; font-size: 12px;">
+            <span style="border: 1px solid var(--border); border-radius: 999px; padding: 6px 12px; color: var(--muted);">base fee <span style="color: var(--green);">9 gwei</span></span>
+            <span style="border: 1px solid var(--border); border-radius: 999px; padding: 6px 12px; color: var(--muted);">30d avg <span style="color: var(--green);">22 gwei</span></span>
+          </div>
+          <div class="mono" style="align-self: flex-start; display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; border: 1px solid var(--border); border-radius: 999px; padding: 5px 11px; color: var(--muted);"><span style="width: 5px; height: 5px; border-radius: 50%; background: var(--green);"></span>etherscan · 6s ago</div>
+        </div>
+
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ PRICING ============ -->
+  <section id="pricing" class="pad-x" style="padding: 0 32px 48px;">
+    <div style="max-width: 880px; margin: 0 auto; text-align: center; display: flex; flex-direction: column; align-items: center;">
+      <div class="mono" style="font-size: 13px; letter-spacing: 0.14em; color: var(--green);">⟩ PRICING</div>
+      <h2 style="margin: 20px 0 0; font-size: clamp(32px, 4.5vw, 48px); letter-spacing: -0.03em; font-weight: 600; line-height: 1.1;">Simple, like a good <em style="font-style: italic; color: var(--green); font-weight: 500;">answer</em>.</h2>
+      <p style="margin: 16px 0 0; max-width: 460px; font-size: 16px; line-height: 1.55; color: var(--muted);">Grounded market reads, everywhere you trade. Start free, no card needed.</p>
+    </div>
+
+    <div style="max-width: 1080px; margin: 40px auto 0; display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 16px;">
+      <div class="seg-group">
+        <button type="button" id="seg-personal" class="seg-btn">Personal · DM</button>
+        <button type="button" id="seg-server" class="seg-btn">Server</button>
+      </div>
+      <div style="display: inline-flex; align-items: center; gap: 12px;">
+        <div class="seg-group">
+          <button type="button" id="seg-monthly" class="seg-btn">Monthly</button>
+          <button type="button" id="seg-yearly" class="seg-btn">Yearly</button>
+        </div>
+        <span class="mono" style="font-size: 12px; letter-spacing: 0.04em; color: var(--green); white-space: nowrap;">Save ~15%</span>
+      </div>
+    </div>
+
+    <div style="max-width: 1080px; margin: 40px auto 0;">
+      <div id="pricing-cards" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(min(280px, 100%), 1fr)); gap: 20px; align-items: stretch;"></div>
+      <p style="margin: 32px 0 0; text-align: center; font-size: 14px; color: var(--muted);">Every plan starts with a free trial. No card required.</p>
+    </div>
+  </section>
+
+  <!-- ============ CHECKOUT MODAL ============ -->
+  <div id="checkout-overlay" class="checkout-overlay hidden">
+    <div class="checkout-modal">
+      <div style="display: flex; align-items: flex-start; justify-content: space-between; gap: 16px;">
+        <div style="display: flex; flex-direction: column; gap: 4px;">
+          <div id="checkout-name" class="mono" style="font-size: 12px; letter-spacing: 0.14em; color: var(--green);">CHECKOUT</div>
+          <div id="checkout-tagline" style="font-size: 18px; font-weight: 600; letter-spacing: -0.01em;"></div>
+        </div>
+        <button type="button" id="checkout-close" class="checkout-close">✕</button>
+      </div>
+
+      <div style="display: flex; align-items: baseline; gap: 10px; padding: 16px; background: var(--cream); border-radius: 12px;">
+        <div id="checkout-price" class="mono" style="font-size: 34px; font-weight: 600; letter-spacing: -0.02em;"></div>
+        <span id="checkout-billing-line" class="mono" style="font-size: 12px; color: var(--muted);"></span>
+      </div>
+
+      <form id="checkout-form" style="display: flex; flex-direction: column; gap: 12px;">
+        <label style="display: flex; flex-direction: column; gap: 6px; font-size: 13px; color: var(--muted);">Email
+          <input type="email" placeholder="you@example.com" class="checkout-input" required>
+        </label>
+        <label style="display: flex; flex-direction: column; gap: 6px; font-size: 13px; color: var(--muted);">Card details
+          <input type="text" placeholder="Card number" class="checkout-input mono" required>
+        </label>
+        <div style="display: flex; gap: 12px;">
+          <input type="text" placeholder="MM / YY" class="checkout-input mono" style="flex: 1;" required>
+          <input type="text" placeholder="CVC" class="checkout-input mono" style="flex: 1;" required>
+        </div>
+        <button type="submit" id="checkout-submit" class="checkout-submit">Continue →</button>
+      </form>
+      <p style="margin: 0; text-align: center; font-size: 12px; color: var(--muted);">No card charged during your free trial. Cancel anytime.</p>
+    </div>
+  </div>
+
+  <!-- ============ CLOSING CTA + FOOTER ============ -->
+  <section class="pad-x closing-cta" style="background: var(--forest); background-image: radial-gradient(rgba(127,227,166,0.13) 1px, transparent 1px); background-size: 26px 26px; padding: 120px 32px 48px;">
+    <div style="max-width: 880px; margin: 0 auto; display: flex; flex-direction: column; align-items: center; text-align: center; gap: 0;">
+      <h2 style="margin: 0; font-size: clamp(40px, 6vw, 68px); letter-spacing: -0.035em; font-weight: 600; line-height: 1.05; color: var(--cream); text-wrap: balance;">Put an <em style="font-style: italic; color: var(--mint); font-weight: 500;">analyst</em> in your chat.</h2>
+      <div style="margin-top: 44px; display: flex; gap: 12px; flex-wrap: wrap; justify-content: center;">
+        <a href="#" class="btn-primary">Add to Discord</a>
+        <a href="#" class="btn-secondary-dark">Add to Telegram</a>
+      </div>
+      <div style="margin-top: 88px; color: var(--cream); display: flex; align-items: baseline; font-weight: 600; font-size: 28px; letter-spacing: -0.02em; line-height: 1;">p<span class="pip-dot">ı<span style="top: 2px; left: 50%; transform: translateX(-50%); width: 6px; height: 6px; background: var(--green-bright);"></span></span>p</div>
+    </div>
+    <div class="mono" style="max-width: 1120px; margin: 64px auto 0; border-top: 1px solid rgba(127,227,166,0.18); padding-top: 28px; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 16px; font-size: 12px; color: rgba(242,247,238,0.5);">
+      <div style="display: flex; flex-wrap: wrap; gap: 22px;">
+        <a href="#what" class="footer-link">Product</a>
+        <a href="#" class="footer-link">Docs</a>
+        <a href="#" class="footer-link">Blog</a>
+        <a href="#pricing" class="footer-link">Pricing</a>
+        <a href="#" class="footer-link">X</a>
+        <a href="#" class="footer-link">Discord</a>
+        <a href="#" class="footer-link">Telegram</a>
+      </div>
+      <span>pip.market</span>
+    </div>
+  </section>
+
+</div>
+
+<script>
+  (function () {
+    var full = "what's the next Fed decision and the odds of a hold?";
+    var el = document.getElementById('pip-typed-text');
+    if (!el) return;
+    var reduced = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    if (reduced) { el.textContent = full; return; }
+    var i = 0;
+    var timer = setInterval(function () {
+      i++;
+      el.textContent = full.slice(0, i);
+      if (i >= full.length) clearInterval(timer);
+    }, 42);
+  })();
+</script>
+
+<script>
+  (function () {
+    var state = { audience: 'personal', billing: 'monthly', currentPlans: [] };
+
+    var personalPlans = [
+      { name: 'FREE', isFree: true, tagline: 'Try Pip one-on-one.', cta: 'Start free',
+        features: ['Grounded answers, always cited', 'Live price, funding & macro data', '5 questions / day'] },
+      { name: 'LITE', monthly: 12, yearly: 10, tagline: "The everyday trader's desk.", cta: 'Start free',
+        features: ['Fast grounded reads on price & macro', "Live funding & open-interest, Pip's sharpest signal", 'Personal memory & watchlist recall', 'Generous daily limit'] },
+      { name: 'PRO', monthly: 19, yearly: 16, popular: true, tagline: 'Full reasoning, full memory.', cta: 'Start 7-day free trial',
+        features: ['Everything in Lite', 'Deep multi-source reasoning', 'Daily deltas on what you track', 'Chart-screenshot reads & deeper scans', 'Priority speed'] }
+    ];
+    var serverPlans = [
+      { name: 'FREE', isFree: true, tagline: 'Give your server a taste.', cta: 'Add to server',
+        features: ['Grounded, cited answers in-channel', 'Live price, funding & macro data', '25 questions / server / day'] },
+      { name: 'PRO', monthly: 29, yearly: 24, popular: true, tagline: 'The research desk for active communities.', cta: 'Start 7-day free trial',
+        features: ['No daily ceiling to worry about', 'Live funding & OI reads', "Per-server memory that learns your community's watchlists", 'Auto-reads tickers & contracts dropped in chat'] },
+      { name: 'ELITE', monthly: 99, yearly: 82, tagline: 'For large & alpha communities.', cta: 'Talk to us',
+        features: ['Everything in Pro', 'Built for high-volume servers', 'Scheduled briefings & event alerts (CPI, FOMC)', "Custom persona in your community's voice", 'Priority support & early features'] }
+    ];
+
+    function esc(s) {
+      return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    }
+
+    function buildPlan(p, billing) {
+      var isYearly = billing === 'yearly' && !p.isFree;
+      var main = p.isFree ? '$0' : (isYearly ? '$' + (p.yearly * 12) : '$' + p.monthly);
+      var suffix = isYearly ? '/yr' : '/mo';
+      var note = isYearly ? '$' + p.yearly + '/mo billed yearly' : '';
+      return {
+        name: p.name, tagline: p.tagline, features: p.features, cta: p.cta,
+        popular: !!p.popular, isFree: !!p.isFree,
+        priceMain: main, priceSuffix: suffix, priceNote: note, hasNote: !!note,
+        billingLine: isYearly ? note : 'billed monthly, cancel anytime'
+      };
+    }
+
+    function cardHtml(plan, idx) {
+      var cls = 'pricing-card' + (plan.popular ? ' popular' : '');
+      var badge = plan.popular
+        ? '<span class="mono" style="position:absolute; top:-11px; left:32px; font-size:11px; letter-spacing:0.12em; background: var(--green); color:#FFFFFF; border-radius:999px; padding:4px 12px;">MOST POPULAR</span>'
+        : '';
+      var noteHtml = plan.hasNote
+        ? '<span class="mono" style="font-size:12px; color: var(--muted);">' + esc(plan.priceNote) + '</span>'
+        : '';
+      var featuresHtml = plan.features.map(function (f) {
+        return '<div style="display:flex; gap:10px; line-height:1.4;"><span style="color: var(--green); flex-shrink:0;">⟩</span><span>' + esc(f) + '</span></div>';
+      }).join('');
+      var ctaClass = plan.popular ? 'pricing-cta filled' : 'pricing-cta outline';
+      var nameColor = plan.popular ? 'var(--green)' : 'var(--muted)';
+      var ctaAttr = (plan.isFree || plan.cta === 'Talk to us') ? '' : (' data-plan-idx="' + idx + '"');
+      return (
+        '<div class="' + cls + '">' + badge +
+        '<div class="mono" style="font-size:12px; letter-spacing:0.14em; color:' + nameColor + ';">' + esc(plan.name) + '</div>' +
+        '<div style="display:flex; align-items:baseline; gap:10px; flex-wrap:wrap;">' +
+          '<div class="mono" style="font-size:44px; font-weight:600; letter-spacing:-0.02em;">' + esc(plan.priceMain) +
+          '<span style="font-size:15px; color: var(--muted); font-weight:400;"> ' + esc(plan.priceSuffix) + '</span></div>' +
+          noteHtml +
+        '</div>' +
+        '<div style="font-size:15px; color:#14342A; font-weight:500; min-height:22px;">' + esc(plan.tagline) + '</div>' +
+        '<div style="height:1px; background:#EAF1E4;"></div>' +
+        '<div style="display:flex; flex-direction:column; gap:12px; font-size:14px; color: var(--muted); flex:1;">' + featuresHtml + '</div>' +
+        '<a href="#" class="' + ctaClass + '"' + ctaAttr + '>' + esc(plan.cta) + '</a>' +
+        '</div>'
+      );
+    }
+
+    function renderPricing() {
+      var isPersonal = state.audience === 'personal';
+      document.getElementById('seg-personal').classList.toggle('active', isPersonal);
+      document.getElementById('seg-server').classList.toggle('active', !isPersonal);
+      var isMonthly = state.billing === 'monthly';
+      document.getElementById('seg-monthly').classList.toggle('active', isMonthly);
+      document.getElementById('seg-yearly').classList.toggle('active', !isMonthly);
+
+      var src = isPersonal ? personalPlans : serverPlans;
+      state.currentPlans = src.map(function (p) { return buildPlan(p, state.billing); });
+      document.getElementById('pricing-cards').innerHTML = state.currentPlans.map(cardHtml).join('');
+    }
+
+    function openCheckout(plan) {
+      document.getElementById('checkout-name').textContent = 'CHECKOUT · ' + plan.name;
+      document.getElementById('checkout-tagline').textContent = plan.tagline;
+      document.getElementById('checkout-price').innerHTML = esc(plan.priceMain) +
+        '<span style="font-size:14px; color: var(--muted); font-weight:400;"> ' + esc(plan.priceSuffix) + '</span>';
+      document.getElementById('checkout-billing-line').textContent = plan.billingLine;
+      document.getElementById('checkout-submit').textContent = plan.cta + ' →';
+      document.getElementById('checkout-overlay').classList.remove('hidden');
+    }
+    function closeCheckout() {
+      document.getElementById('checkout-overlay').classList.add('hidden');
+    }
+
+    document.getElementById('seg-personal').addEventListener('click', function () { state.audience = 'personal'; renderPricing(); });
+    document.getElementById('seg-server').addEventListener('click', function () { state.audience = 'server'; renderPricing(); });
+    document.getElementById('seg-monthly').addEventListener('click', function () { state.billing = 'monthly'; renderPricing(); });
+    document.getElementById('seg-yearly').addEventListener('click', function () { state.billing = 'yearly'; renderPricing(); });
+
+    document.getElementById('pricing-cards').addEventListener('click', function (e) {
+      var btn = e.target.closest('[data-plan-idx]');
+      if (!btn) return;
+      e.preventDefault();
+      openCheckout(state.currentPlans[parseInt(btn.getAttribute('data-plan-idx'), 10)]);
+    });
+
+    var overlay = document.getElementById('checkout-overlay');
+    overlay.addEventListener('click', function (e) { if (e.target === overlay) closeCheckout(); });
+    document.getElementById('checkout-close').addEventListener('click', closeCheckout);
+    document.getElementById('checkout-form').addEventListener('submit', function (e) {
+      e.preventDefault();
+      closeCheckout();
+    });
+
+    renderPricing();
+  })();
+</script>
+
+<script>
+  (function () {
+    var toggle = document.getElementById('nav-toggle');
+    var dropdown = document.getElementById('nav-dropdown');
+    if (!toggle || !dropdown) return;
+
+    function closeMenu() {
+      dropdown.classList.add('hidden');
+      toggle.setAttribute('aria-expanded', 'false');
+    }
+    function openMenu() {
+      dropdown.classList.remove('hidden');
+      toggle.setAttribute('aria-expanded', 'true');
+    }
+
+    toggle.addEventListener('click', function (e) {
+      e.stopPropagation();
+      if (dropdown.classList.contains('hidden')) openMenu(); else closeMenu();
+    });
+    dropdown.addEventListener('click', function (e) {
+      if (e.target.tagName === 'A') closeMenu();
+    });
+    document.addEventListener('click', function (e) {
+      if (!dropdown.contains(e.target) && e.target !== toggle) closeMenu();
+    });
+    document.addEventListener('keydown', function (e) {
+      if (e.key === 'Escape') closeMenu();
+    });
+  })();
+</script>
+
+</body>
+</html>

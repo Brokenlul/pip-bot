@@ -1,6 +1,7 @@
 import { z } from 'zod';
 
 export interface ToolContext {
+  platform: string;
   guildId: string;
   userId: string;
   /**

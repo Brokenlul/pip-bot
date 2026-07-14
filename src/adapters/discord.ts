@@ -22,6 +22,7 @@ import {
 } from './platform.js';
 import { betaGate, setFounderNotifier, recordFeedback, type GateDecision } from '../beta/guardrails.js';
 import { fmtUtcHm } from '../core/util.js';
+import { registerPusher } from '../core/push.js';
 
 // Pip is @-mention / DM only — no slash command. Servers: @-mention in an
 // allowed channel; DMs: just message it.
@@ -60,6 +61,8 @@ export class DiscordAdapter implements PlatformAdapter {
     this.handler = handler;
     // Founder spend-alert DMs (50/80/100% of daily budget) route through Discord.
     setFounderNotifier((userId, text) => this.dmUser(userId, text));
+    // Price-alert pushes (src/core/alert-poller.ts) route through the same DM path.
+    registerPusher('discord', (userId, text) => this.dmUser(userId, text));
 
     const client = new Client({
       intents: [
@@ -377,8 +380,12 @@ function sniffImageType(buf: Buffer): NormalizedImage['mediaType'] | undefined {
 }
 
 function toEmbed(reply: NormalizedReply, question: string): EmbedBuilder {
-  const embed = new EmbedBuilder().setColor(PIP_GREEN).setDescription(truncate(reply.body, 4000));
+  const embed = new EmbedBuilder().setColor(PIP_GREEN);
   if (reply.title) embed.setTitle(reply.title);
+  // The body is one sectioned text block (📊 Snapshot / 🧠 Read / …) — same
+  // layout Telegram renders, so both platforms read identically.
+  const body = truncate(reply.body, 4000).trim();
+  if (body) embed.setDescription(body);
   // Sources are intentionally NOT shown — Pip answers as its own brain. They're
   // still collected and persisted (conversations.sources) for internal debugging.
   embed.setFooter({

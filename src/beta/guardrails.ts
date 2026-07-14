@@ -60,6 +60,8 @@ export interface UsageLogRow {
   degraded: boolean;
   cacheHit: boolean;
   failed: boolean;
+  /** Why a failed turn failed ("timeout" or "<kind>[:<status>][:<error_type>] <message>"), truncated to 500 chars. */
+  errorDetail?: string;
 }
 
 /** Fire-and-forget write of one request's usage + cost. Never throws. */
@@ -85,6 +87,7 @@ export async function logUsage(row: UsageLogRow): Promise<void> {
       degraded: row.degraded,
       cache_hit: row.cacheHit,
       failed: row.failed,
+      error_detail: row.errorDetail ?? null,
     })
     .throwOnError();
 }
