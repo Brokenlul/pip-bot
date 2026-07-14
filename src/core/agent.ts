@@ -40,6 +40,7 @@ import { fredTool } from '../data/fred.js';
 import { cpiCalendarTool } from '../data/cpi-calendar.js';
 import { newsWireTool } from '../data/news-wire.js';
 import { officialStatementTool } from '../data/official-statement.js';
+import { riskExposureTool } from '../data/risk-exposure.js';
 import { setPriceAlertTool, listPriceAlertsTool, cancelPriceAlertTool } from '../data/price-alerts.js';
 import { polymarketTool } from '../data/polymarket.js';
 import { kalshiTool } from '../data/kalshi.js';
@@ -201,6 +202,7 @@ Tools you have (prefer them over training data). A trader is waiting on you — 
 - render_price_chart to DRAW a chart and attach it to your reply as an image — you CAN render charts, never say you can't. Use it when a user asks to see something on a chart ("show me that on a chart", "chart it", "use MACD", "add RSI/EMAs", "mark the FVGs") or when what you're discussing lands better as a picture. Pass the coin, the timeframe the conversation is about, up to 6 levels (entry/stop/target/level, each with price + short label), and any indicators the user asked for or that sharpen the read: ema20/50/100/200, sma20/50, vwap, bollinger, macd, rsi, fvg (unfilled fair-value-gap zones). The tool returns indicator_readout with the live values — weave those numbers into your text. Covers any Hyperliquid perp (BTC/ETH/SOL/HYPE/LINK… and builder markets like TSLA/BOT). The image attaches automatically — refer to it naturally and keep the text short; the chart carries the picture. Boundaries, stated honestly when relevant: you chart on YOUR canvas from live data — you can't annotate someone else's screenshot, and you don't run proprietary paid suites (e.g. LuxAlgo's full SMC labels) — but you CAN draw FVGs and the standard toolkit above, so offer that instead of just declining. If a coin isn't on Hyperliquid, say you can't chart that one and give the read in text.
 - indicator_snapshot for current indicator VALUES without drawing a chart — ema20/50/100/200, sma20/50, vwap, bollinger, macd, rsi, fvg on any Hyperliquid perp + timeframe, each with an explicit "price is ABOVE/BELOW X by N%" relation. MANDATORY before any text claim about MAs/RSI/MACD/price-vs-level; cheaper and faster than rendering when no one asked to SEE a chart.
 - hyperliquid_whale_positions for what the biggest / most profitable traders on Hyperliquid are actually holding — live open positions with entry price, direction, size, unrealized PnL, leverage, and liquidation, plus long/short totals and weighted average entries. Use it for "whale entries", "whale uPnL", "are whales long or short X" on any standard Hyperliquid perp (HYPE included — this IS the way to read whales on HYPE); omit the coin for a cross-market view. Frame them as the venue's top realized-PnL leaderboard traders — never as verified "smart money", and never as a signal to copy their book.
+- account_risk_exposure reads a USER'S OWN current Hyperliquid risk state from their public wallet address: equity, aggregate leverage, per-position notional/leverage/margin, distance to liquidation, coin concentration, funding accrued since each position opened. Ask for their address if they haven't given one — never guess it, never use another tool's address for this. CRITICAL BOUNDARY: this describes CURRENT exposure, full stop — it is NOT a sizing/allocation/leverage recommendation engine, and you must never let it become one. If the numbers show something notable (concentrated in one coin, thin liquidation buffer, high aggregate leverage), say so as a plain observation ("62% of your notional is in ETH, and that position is 6% from liquidation") and stop there — do NOT follow it with what they should do about it (reduce, add margin, rebalance, hedge). Same posture as the trade-idea rules: describe state, hand the decision back.
 - macro_indicator (FRED) for the latest CPI/PCE/unemployment/GDP/yields numbers (may be unavailable if not configured).
 - next_fomc_meeting and next_cpi_release for macro event *dates*; macro_indicator for the actual figures.
 - news_wire for breaking crypto/macro headlines from fast Telegram news wires (BWEnews, infinityhedge) — exchange listings, geopolitical headlines, and data prints (CPI/NFP/Fed) often minutes ahead of mainstream press or FRED's own ingestion lag. Reach for this WHENEVER a scheduled print's release time has just passed (or is due within the hour) and macro_indicator still shows the prior period — a "not out yet" read from FRED alone can be stale, not authoritative; news_wire (or web_search) often has the number first. Cross-check it against macro_indicator/web_search rather than repeating one source's "no update" as fact.
@@ -245,7 +247,8 @@ function buildRegistry(): ToolRegistry {
     .register(polymarketTool)
     .register(kalshiTool)
     .register(newsWireTool)
-    .register(officialStatementTool);
+    .register(officialStatementTool)
+    .register(riskExposureTool);
   if (fredEnabled()) reg.register(fredTool);
   if (finnhubEnabled()) {
     reg
