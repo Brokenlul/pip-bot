@@ -432,7 +432,6 @@ const ALLOW_ALL: GateDecision = {
 
 const lastMessageAt = new Map<string, number>(); // userKey -> ms (cooldown)
 const politeRepliedToday = new Set<string>(); // non-testers: one reply/day
-const trialNoticedToday = new Set<string>(); // expired trials: one nudge/day
 
 /**
  * The single pre-LLM checkpoint. Returns a decision the adapter acts on BEFORE
@@ -510,11 +509,10 @@ export async function betaGate(msg: NormalizedMessage): Promise<GateDecision> {
       }
       return blocked("Couldn't record that just now — paste the tweet link again in a minute.");
     }
-    // Nudge once per day, then go quiet — an expired user spamming questions
-    // shouldn't get an expired notice per message.
-    const noticeKey = `${dayStartUtc().toISOString().slice(0, 10)}:${userKey}`;
-    if (trialNoticedToday.has(noticeKey)) return blockedSilent('trial lapsed', msg);
-    trialNoticedToday.add(noticeKey);
+    // Reply on EVERY ping (founder decision 2026-07-15): a lapsed user who @s
+    // Pip should always get the expired notice — never silence. Reactive only
+    // (fires in response to their message, never an outbound DM), and it's a
+    // canned string with no model call, so repeats cost nothing.
     if (!tester.extension_used) {
       return blocked(
         'Your free week with Pip is up 🌱 Two ways to keep going:\n' +
