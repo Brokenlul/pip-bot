@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>pip · Docs</title>
+<meta name="description" content="How to add pip to your Discord or Telegram, how to talk to it, what it can answer, plans and limits, and FAQ.">
+<link rel="canonical" href="https://pipinvest.xyz/docs">
+<meta name="theme-color" content="#F2F7EE">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%230E3B26'/%3E%3Ccircle cx='16' cy='15' r='4.5' fill='%231FBE6C'/%3E%3C/svg%3E">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://pipinvest.xyz/docs">
+<meta property="og:title" content="pip · Docs">
+<meta property="og:description" content="How to add pip, talk to it, and what it can answer.">
+<meta property="og:image" content="https://pipinvest.xyz/assets/og.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:image" content="https://pipinvest.xyz/assets/og.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --cream: #F2F7EE; --ink: #08160F; --muted: #5C6E63; --green: #12A15A;
+    --green-bright: #1FBE6C; --mint: #7FE3A6; --border: #D8E6D3; --forest: #0E3B26; --clay: #C25B37;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; background: var(--cream); overflow-x: hidden; }
+  body { font-family: 'Geist', system-ui, sans-serif; color: var(--ink); -webkit-font-smoothing: antialiased; line-height: 1.6; }
+  ::selection { background: var(--green); color: var(--cream); }
+  a { color: var(--green); text-decoration: none; -webkit-tap-highlight-color: transparent; }
+  a:hover { color: var(--green-bright); }
+  .mono { font-family: 'Geist Mono', ui-monospace, monospace; }
+
+  nav { position: sticky; top: 16px; z-index: 50; display: flex; justify-content: center; padding: 0 24px; }
+  .nav-pill { background: rgba(255,255,255,0.92); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); border: 1px solid rgba(216,230,211,0.7); border-radius: 999px; box-shadow: 0 12px 40px -12px rgba(14,59,38,0.25), 0 2px 8px rgba(8,22,15,0.05); padding: 8px 22px; height: 56px; display: flex; align-items: center; gap: 24px; max-width: 100%; }
+  .pip-logo { text-decoration: none; color: var(--ink); display: flex; align-items: baseline; font-weight: 600; letter-spacing: -0.02em; line-height: 1; font-size: 22px; }
+  .pip-dot { position: relative; display: inline-block; }
+  .pip-dot span { position: absolute; top: 1px; left: 50%; transform: translateX(-50%); width: 5px; height: 5px; border-radius: 50%; background: var(--green); box-shadow: 0 0 8px 2px rgba(127,227,166,0.7); }
+  .nav-links { display: flex; align-items: center; gap: 22px; font-size: 14px; }
+  .nav-link { color: var(--muted); }
+  .nav-link:hover { color: var(--ink); }
+  .nav-link.current { color: var(--ink); }
+  @media (max-width: 640px) { .nav-links .hide-sm { display: none; } }
+
+  .wrap { max-width: 860px; margin: 0 auto; padding: 72px 24px 40px; }
+  .eyebrow { font-family: 'Geist Mono', ui-monospace, monospace; font-size: 13px; letter-spacing: 0.14em; color: var(--green); }
+  h1 { font-size: clamp(40px, 7vw, 60px); letter-spacing: -0.035em; font-weight: 600; line-height: 1.04; margin: 18px 0 0; }
+  .lede { font-size: 19px; color: var(--muted); max-width: 620px; margin: 20px 0 0; }
+  h2 { font-size: 26px; letter-spacing: -0.02em; font-weight: 600; margin: 56px 0 0; scroll-margin-top: 90px; }
+  h3 { font-size: 17px; font-weight: 600; margin: 28px 0 0; }
+  p { margin: 14px 0 0; color: #1c2a22; }
+  ul { margin: 14px 0 0; padding-left: 0; list-style: none; }
+  li { position: relative; padding-left: 22px; margin: 10px 0; color: #1c2a22; }
+  li::before { content: '⟩'; position: absolute; left: 0; color: var(--green); }
+  code { font-family: 'Geist Mono', ui-monospace, monospace; font-size: 0.9em; background: #EAF1E4; border: 1px solid var(--border); border-radius: 6px; padding: 1px 6px; color: var(--forest); }
+  .card { background: #FFFFFF; border: 1px solid var(--border); border-radius: 16px; padding: 24px 26px; margin-top: 20px; }
+  .btn { display: inline-block; background: var(--green); color: #FFFFFF; font-size: 15px; font-weight: 500; padding: 12px 22px; border-radius: 10px; }
+  .btn:hover { background: var(--green-bright); color: #FFFFFF; }
+  .btn.ghost { background: transparent; color: var(--ink); border: 1px solid var(--border); }
+  .btn.ghost:hover { border-color: var(--green); color: var(--green); }
+  .btn-row { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 20px; }
+  .toc { display: flex; flex-wrap: wrap; gap: 8px 18px; margin-top: 28px; font-size: 14px; }
+  .toc a { color: var(--muted); }
+  .toc a:hover { color: var(--green); }
+  .disclaimer { margin-top: 56px; border-top: 1px solid var(--border); padding-top: 20px; font-size: 13px; color: var(--muted); }
+
+  footer { background: var(--forest); background-image: radial-gradient(rgba(127,227,166,0.13) 1px, transparent 1px); background-size: 26px 26px; padding: 48px 24px; }
+  .foot-inner { max-width: 860px; margin: 0 auto; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 16px; font-family: 'Geist Mono', ui-monospace, monospace; font-size: 12px; color: rgba(242,247,238,0.5); }
+  .foot-inner a { color: rgba(242,247,238,0.5); }
+  .foot-inner a:hover { color: var(--mint); }
+  .foot-links { display: flex; flex-wrap: wrap; gap: 20px; }
+</style>
+</head>
+<body>
+
+<nav>
+  <div class="nav-pill">
+    <a href="/" class="pip-logo">p<span class="pip-dot">ı<span></span></span>p</a>
+    <div class="nav-links">
+      <a href="/#what" class="nav-link hide-sm">Product</a>
+      <a href="/#pricing" class="nav-link">Pricing</a>
+      <a href="/docs" class="nav-link current">Docs</a>
+    </div>
+  </div>
+</nav>
+
+<div class="wrap">
+  <div class="eyebrow">⟩ DOCS</div>
+  <h1>Get started with pip.</h1>
+  <p class="lede">pip is an AI market analyst that lives in your Discord or Telegram. Add it, @mention it, and ask. This page covers setup, how to talk to it, what it can answer, plans, and privacy.</p>
+
+  <div class="toc">
+    <a href="#add">Add pip</a>
+    <a href="#talk">How to ask</a>
+    <a href="#can">What it can do</a>
+    <a href="#memory">Memory</a>
+    <a href="#plans">Plans &amp; limits</a>
+    <a href="#privacy">Privacy</a>
+    <a href="#faq">FAQ</a>
+  </div>
+
+  <h2 id="add">1 · Add pip</h2>
+  <p>pip runs on two surfaces. Add it wherever your community lives — the same analyst, the same memory model on each.</p>
+  <div class="card">
+    <h3>Discord</h3>
+    <p>Invite the bot to your server (you need <strong>Manage Server</strong>). Once it's in, @mention it in any channel it can see, or DM it directly.</p>
+    <h3>Telegram</h3>
+    <p>Open <a href="https://t.me/pipinvestbot" target="_blank" rel="noopener">@pipinvestbot</a> and send <code>/start</code>. In groups, add the bot and @mention it (or reply to its messages).</p>
+    <div class="btn-row">
+      <a class="btn" href="https://discord.com/oauth2/authorize?client_id=1521437096294744216&scope=bot&permissions=274878024768" target="_blank" rel="noopener">Add to Discord</a>
+      <a class="btn ghost" href="https://t.me/pipinvestbot" target="_blank" rel="noopener">Add to Telegram</a>
+    </div>
+  </div>
+
+  <h2 id="talk">2 · How to ask</h2>
+  <p>There's no command syntax to learn — you talk to pip in plain language.</p>
+  <ul>
+    <li><strong>In a server:</strong> <code>@pip what's funding on BTC perps right now?</code></li>
+    <li><strong>In a DM:</strong> just send the question — no @mention needed.</li>
+    <li><strong>Follow-ups:</strong> reply to one of pip's messages and it keeps the context — <em>"render that on a chart"</em>, <em>"what about ETH?"</em></li>
+    <li><strong>Charts &amp; screenshots:</strong> attach a chart image and ask pip to read it, or ask it to draw one.</li>
+    <li><strong>Contract addresses:</strong> paste a token address and pip runs a safety + liquidity scan.</li>
+  </ul>
+
+  <h2 id="can">3 · What it can do</h2>
+  <p>One analyst for the whole tape. If it trades, or moves what trades, pip covers it — always grounded in live data pulled the moment you ask, never made up.</p>
+  <ul>
+    <li><strong>Prices &amp; structure</strong> — spot &amp; perp prices, levels, RSI/EMA/MACD/VWAP reads on any timeframe.</li>
+    <li><strong>Derivatives</strong> — live funding &amp; open interest (including Hyperliquid builder markets), the positioning lens.</li>
+    <li><strong>Macro &amp; events</strong> — next FOMC / CPI dates, rate-decision context, key macro indicators.</li>
+    <li><strong>Equities</strong> — quotes, fundamentals, earnings dates &amp; surprises for listed names that move crypto.</li>
+    <li><strong>Token scans</strong> — liquidity, holders, concentration, honeypot / authority checks, smart-money flow on a pasted contract.</li>
+    <li><strong>Charts</strong> — branded candlestick charts with indicators, drawn on request.</li>
+    <li><strong>Event &amp; prediction markets</strong> — market-implied odds for elections, sports and macro from Polymarket &amp; Kalshi.</li>
+    <li><strong>Live web</strong> — checks current facts and breaking headlines when the answer needs it.</li>
+  </ul>
+  <p class="mono" style="font-size:13px; color:var(--muted);">pip is an analyst, not a guru — it won't hand you buy/sell signals or "setups." It gives you two-sided, grounded reads and stress-tests your own thesis.</p>
+
+  <h2 id="memory">4 · Memory</h2>
+  <p>pip remembers per server and per person. Your community's watchlists, recurring tickers, and questions become memory that makes answers sharper over time — and it adapts to how <em>you</em> like to be answered. Memory is scoped: one server never sees another's, and one trader's history is never served to someone else.</p>
+
+  <h2 id="plans">5 · Plans &amp; limits</h2>
+  <p>Every plan starts with a <strong>7-day free trial — no card required</strong>. Free tiers stay free with a daily question limit; paid plans lift the ceiling and unlock deeper reasoning, memory, chart reads and scans. See the current lineup on the <a href="/#pricing">pricing page</a>.</p>
+  <ul>
+    <li><strong>Personal (DM):</strong> Free, Lite, Pro — pip one-on-one.</li>
+    <li><strong>Server:</strong> Free, Pro, Elite — pip for the whole community.</li>
+  </ul>
+  <p>After you subscribe, access unlocks automatically on the Discord or Telegram handle you enter at checkout — usually within a minute of payment.</p>
+
+  <h2 id="privacy">6 · Privacy</h2>
+  <p>pip only stores the questions asked to it and its own answers, scoped to the server or DM they came from — never your wallet, never your keys, never private channels it isn't in. Full detail in the <a href="/privacy">Privacy Policy</a> and <a href="/terms">Terms of Use</a>.</p>
+
+  <h2 id="faq">7 · FAQ</h2>
+  <h3>Is this financial advice?</h3>
+  <p>No. pip is an analytical tool. Everything it says is information, not advice, and not a recommendation to buy or sell anything. You are responsible for your own decisions.</p>
+  <h3>Where does the data come from?</h3>
+  <p>Live market, derivatives, macro and on-chain sources, pulled at question time and timestamped. pip synthesizes them into one read.</p>
+  <h3>Can pip trade for me?</h3>
+  <p>No. pip never touches funds, never places orders, and never asks for wallet keys or seed phrases. It reads and analyzes only.</p>
+  <h3>How do I cancel?</h3>
+  <p>Manage or cancel your subscription any time through the payment link in your receipt. Your trial never auto-charges without you confirming.</p>
+  <h3>I paid but didn't get access.</h3>
+  <p>Double-check the handle you entered at checkout matches your Discord username / Telegram handle exactly. Still stuck? Reach us on <a href="https://discord.gg/b6uzDj4Pqc" target="_blank" rel="noopener">Discord</a>.</p>
+
+  <p class="disclaimer">pip provides market information and analysis only. Nothing here is financial, investment, legal or tax advice. Markets are risky; you trade at your own risk.</p>
+</div>
+
+<footer>
+  <div class="foot-inner">
+    <div class="foot-links">
+      <a href="/">Home</a>
+      <a href="/docs">Docs</a>
+      <a href="/#pricing">Pricing</a>
+      <a href="/privacy">Privacy</a>
+      <a href="/terms">Terms</a>
+      <a href="https://x.com/pipinvestbot" target="_blank" rel="noopener">X</a>
+      <a href="https://discord.gg/b6uzDj4Pqc" target="_blank" rel="noopener">Discord</a>
+      <a href="https://t.me/pipinvestbot" target="_blank" rel="noopener">Telegram</a>
+    </div>
+    <span>pipinvest.xyz</span>
+  </div>
+</footer>
+
+</body>
+</html>
