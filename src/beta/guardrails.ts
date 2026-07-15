@@ -163,30 +163,104 @@ async function getTester(platform: string, platformId: string): Promise<TesterRo
   return (data?.[0] as TesterRow | undefined) ?? null;
 }
 
+/** The wider slice needed to merge a paid grant onto an existing row. */
+interface HandleRow extends TesterRow {
+  tier: string | null;
+  subscription_provider: string | null;
+  subscription_id: string | null;
+  subscription_status: string | null;
+}
+const HANDLE_COLS =
+  'access_until, extension_used, tier, subscription_provider, subscription_id, subscription_status';
+
+/** The later of two access_until values; 'infinity'/unparseable (never lapses) wins. */
+function laterAccess(a: string | null, b: string | null): string | null {
+  if (!a) return b;
+  if (!b) return a;
+  const ta = new Date(a).getTime();
+  const tb = new Date(b).getTime();
+  if (!Number.isFinite(ta)) return a;
+  if (!Number.isFinite(tb)) return b;
+  return ta >= tb ? a : b;
+}
+
 /**
- * Telegram invites are added by @handle (the numeric id is unknowable until the
- * person messages the bot). If this user's handle matches a pending `@handle`
- * row, claim it: rekey the row to their numeric id so every later check hits
- * the fast platform_id path.
+ * Claim a pending row keyed by the user's `@handle` (their numeric id is
+ * unknowable until they message Pip). Two things land keyed this way:
+ *   - a Telegram whitelist invite, and
+ *   - a PAID checkout grant written by the pip-site webhooks (either platform).
+ *
+ * If the user has no numeric row yet, rekey the handle row to their id. If they
+ * already have one (e.g. a trial user who just paid), merge the grant in — take
+ * the later access_until + the subscription fields — and drop the handle row.
+ * Returns the effective row, or `existing` when there's nothing to claim.
  */
-async function claimHandleInvite(msg: NormalizedMessage): Promise<TesterRow | null> {
-  if (msg.platform !== 'telegram' || !msg.userName) return null;
+async function claimHandleRow(
+  msg: NormalizedMessage,
+  existing: TesterRow | null,
+): Promise<TesterRow | null> {
+  if (!msg.userName) return existing;
   const db = getDb();
-  if (!db) return null;
+  if (!db) return existing;
   const handle = `@${msg.userName.toLowerCase()}`;
+
   const { data, error } = await db
     .from('beta_testers')
-    .update({ platform_id: msg.userId, name: msg.userName })
-    .eq('platform', 'telegram')
+    .select(HANDLE_COLS)
+    .eq('platform', msg.platform)
     .eq('platform_id', handle)
-    .select(TESTER_COLS);
+    .limit(1);
   if (error) {
-    console.warn(`[beta] claimHandleInvite: ${error.message}`);
-    return null;
+    console.warn(`[beta] claimHandleRow lookup: ${error.message}`);
+    return existing;
   }
-  const claimed = (data?.[0] as TesterRow | undefined) ?? null;
-  if (claimed) console.log(`[beta] telegram ${handle} claimed by id ${msg.userId}`);
-  return claimed;
+  const hr = data?.[0] as HandleRow | undefined;
+  if (!hr) return existing;
+
+  // No numeric row → rekey the handle row to the id (fast path forever after).
+  if (!existing) {
+    const { data: up, error: e2 } = await db
+      .from('beta_testers')
+      .update({ platform_id: msg.userId, name: msg.userName })
+      .eq('platform', msg.platform)
+      .eq('platform_id', handle)
+      .select(TESTER_COLS);
+    if (e2) {
+      console.warn(`[beta] claimHandleRow rekey: ${e2.message}`);
+      return existing;
+    }
+    const claimed = (up?.[0] as TesterRow | undefined) ?? null;
+    if (claimed) console.log(`[beta] ${msg.platform} ${handle} claimed by id ${msg.userId}`);
+    return claimed ?? existing;
+  }
+
+  // Numeric row exists → merge the grant into it, then remove the handle row.
+  const merged = laterAccess(existing.access_until, hr.access_until);
+  const patch: Record<string, unknown> = { access_until: merged };
+  if (hr.subscription_provider) {
+    patch.tier = hr.tier;
+    patch.subscription_provider = hr.subscription_provider;
+    patch.subscription_id = hr.subscription_id;
+    patch.subscription_status = hr.subscription_status;
+  }
+  const { error: e3 } = await db
+    .from('beta_testers')
+    .update(patch)
+    .eq('platform', msg.platform)
+    .eq('platform_id', msg.userId);
+  if (e3) {
+    console.warn(`[beta] claimHandleRow merge: ${e3.message}`);
+    return existing;
+  }
+  await db
+    .from('beta_testers')
+    .delete()
+    .eq('platform', msg.platform)
+    .eq('platform_id', handle);
+  console.log(
+    `[beta] merged ${hr.subscription_provider ?? 'invite'} grant into ${msg.platform}:${msg.userId}`,
+  );
+  return { access_until: merged, extension_used: existing.extension_used };
 }
 
 /** First-touch enrollment from an allowlisted server. Idempotent (PK upsert). */
@@ -388,7 +462,7 @@ export async function betaGate(msg: NormalizedMessage): Promise<GateDecision> {
   //    (no auto-enroll from DMs; a DM-first user needs a guild touch or a
   //    manual/handle invite first).
   let tester = await getTester(msg.platform, msg.userId);
-  if (!tester) tester = await claimHandleInvite(msg);
+  if (!tester) tester = await claimHandleRow(msg, null);
   if (!tester && !msg.guildId.startsWith('dm:')) {
     tester = await autoEnroll(msg.platform, msg.userId, msg.userName);
   }
@@ -421,6 +495,12 @@ export async function betaGate(msg: NormalizedMessage): Promise<GateDecision> {
   //     ONE extra week for tweeting about Pip (link pasted in chat, verified
   //     manually by the founder), then paid. Checked before the cooldown so a
   //     pasted tweet link is never silently dropped.
+  if (accessLapsed(tester, now)) {
+    // A paid checkout grant may be waiting under their @handle — claim/merge it
+    // before nudging. If it un-lapses them, the next check falls through to serve.
+    const upgraded = await claimHandleRow(msg, tester);
+    if (upgraded) tester = upgraded;
+  }
   if (accessLapsed(tester, now)) {
     const tweetUrl = msg.text.match(TWEET_URL_RE)?.[0];
     if (tweetUrl && !tester.extension_used) {
