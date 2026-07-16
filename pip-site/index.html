@@ -584,7 +584,18 @@
         <button type="button" id="checkout-card" class="checkout-submit">Pay with card →</button>
         <button type="button" id="checkout-usdc" class="checkout-alt">Pay with crypto (USDC & more) →</button>
       </div>
-      <p style="margin: 0; text-align: center; font-size: 12px; color: var(--muted); line-height: 1.5;">You'll be taken to our payment partner. Access unlocks on your <span id="co-plat-word">Discord</span> account automatically after payment. 7-day free trial — cancel anytime.</p>
+      <p style="margin: 0; text-align: center; font-size: 12px; color: var(--muted); line-height: 1.5;">Access unlocks on your <span id="co-plat-word">Discord</span> account automatically after payment. 7-day free trial — cancel anytime.</p>
+    </div>
+  </div>
+
+  <!-- ====== IN-SITE CRYPTO CHECKOUT (MoonPay, embedded via iframe) ====== -->
+  <div id="payframe-overlay" class="checkout-overlay hidden" style="padding: 16px;">
+    <div style="position: relative; width: 100%; max-width: 480px; height: min(770px, 92vh); background: #0f0f10; border: 1px solid var(--border); border-radius: 18px; overflow: hidden; box-shadow: 0 32px 80px -24px rgba(8,22,15,0.6); display: flex; flex-direction: column;">
+      <div style="display: flex; align-items: center; justify-content: space-between; padding: 9px 12px; gap: 12px; flex-shrink: 0;">
+        <a id="payframe-newtab" href="#" target="_blank" rel="noopener" class="mono" style="font-size: 11.5px; color: var(--muted); text-decoration: none;">Trouble connecting? Open in new tab ↗</a>
+        <button type="button" id="payframe-close" class="checkout-close">✕</button>
+      </div>
+      <iframe id="payframe" title="Crypto checkout" style="flex: 1; width: 100%; border: 0;" allow="clipboard-read; clipboard-write; payment; publickey-credentials-get *; accelerometer; gyroscope"></iframe>
     </div>
   </div>
 
@@ -805,6 +816,18 @@
     function closeCheckout() {
       document.getElementById('checkout-overlay').classList.add('hidden');
     }
+    // Crypto checkout opens IN-SITE via an iframe (MoonPay's page allows framing)
+    // rather than a full redirect, so the buyer never leaves pipinvest.xyz.
+    function openPayFrame(url) {
+      document.getElementById('payframe').src = url;
+      document.getElementById('payframe-newtab').href = url;
+      closeCheckout();
+      document.getElementById('payframe-overlay').classList.remove('hidden');
+    }
+    function closePayFrame() {
+      document.getElementById('payframe-overlay').classList.add('hidden');
+      document.getElementById('payframe').src = 'about:blank';
+    }
 
     function normalizeHandle(raw, platform) {
       return raw.trim().replace(/^@+/, '');
@@ -849,7 +872,7 @@
           body: JSON.stringify({ slug: plan.slug, billing: plan.billing, platform: state.platform, handle: handle })
         });
         var data = await resp.json().catch(function () { return {}; });
-        if (resp.ok && data.url) { window.location.href = data.url; return; }
+        if (resp.ok && data.url) { openPayFrame(data.url); return; }
         showError(resp.status === 503
           ? 'Crypto checkout isn’t live yet — try card, or check back shortly.'
           : 'Couldn’t start crypto checkout — try again, or use card.');
@@ -880,6 +903,11 @@
     document.getElementById('co-plat-telegram').addEventListener('click', function () { setPlatform('telegram'); });
     document.getElementById('checkout-card').addEventListener('click', function () { goPay('dodo'); });
     document.getElementById('checkout-usdc').addEventListener('click', goPayMoonpay);
+
+    var payframeOverlay = document.getElementById('payframe-overlay');
+    document.getElementById('payframe-close').addEventListener('click', closePayFrame);
+    payframeOverlay.addEventListener('click', function (e) { if (e.target === payframeOverlay) closePayFrame(); });
+    document.addEventListener('keydown', function (e) { if (e.key === 'Escape' && !payframeOverlay.classList.contains('hidden')) closePayFrame(); });
 
     renderPricing();
   })();
