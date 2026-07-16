@@ -582,7 +582,7 @@
       <p id="co-error" class="hidden" style="margin: -8px 0 0; font-size: 12px; color: var(--clay);"></p>
       <div style="display: flex; flex-direction: column; gap: 10px;">
         <button type="button" id="checkout-card" class="checkout-submit">Pay with card →</button>
-        <button type="button" id="checkout-usdc" class="checkout-alt">Pay with USDC (crypto) →</button>
+        <button type="button" id="checkout-usdc" class="checkout-alt">Pay with crypto (USDC & more) →</button>
       </div>
       <p style="margin: 0; text-align: center; font-size: 12px; color: var(--muted); line-height: 1.5;">You'll be taken to our payment partner. Access unlocks on your <span id="co-plat-word">Discord</span> account automatically after payment. 7-day free trial — cancel anytime.</p>
     </div>
@@ -820,11 +820,44 @@
       var url = checkoutUrl(provider, plan.slug, plan.billing, state.platform, handle);
       if (!url) {
         showError(provider === 'dodo'
-          ? 'Card checkout isn’t live yet — try USDC, or check back shortly.'
-          : 'USDC checkout isn’t live yet — try card, or check back shortly.');
+          ? 'Card checkout isn’t live yet — try crypto, or check back shortly.'
+          : 'Crypto checkout isn’t live yet — try card, or check back shortly.');
         return;
       }
       window.location.href = url;
+    }
+
+    // Crypto path = MoonPay Commerce. Hosted pay links can't carry per-buyer
+    // metadata via URL, so we ask our own endpoint to create the charge with the
+    // handle baked into `meta`, then redirect to the hosted pageUrl it returns.
+    async function goPayMoonpay() {
+      var plan = state.checkoutPlan;
+      if (!plan) return;
+      var handle = normalizeHandle(document.getElementById('co-handle').value, state.platform);
+      if (handle.length < 2) {
+        showError('Enter your ' + (state.platform === 'discord' ? 'Discord username' : 'Telegram handle') + ' so Pip can unlock your access.');
+        return;
+      }
+      var btn = document.getElementById('checkout-usdc');
+      var prev = btn.textContent;
+      btn.disabled = true; btn.textContent = 'Preparing checkout…';
+      hideError();
+      try {
+        var resp = await fetch('/api/checkout/moonpay', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ slug: plan.slug, billing: plan.billing, platform: state.platform, handle: handle })
+        });
+        var data = await resp.json().catch(function () { return {}; });
+        if (resp.ok && data.url) { window.location.href = data.url; return; }
+        showError(resp.status === 503
+          ? 'Crypto checkout isn’t live yet — try card, or check back shortly.'
+          : 'Couldn’t start crypto checkout — try again, or use card.');
+      } catch (e) {
+        showError('Couldn’t reach checkout — check your connection and try again.');
+      } finally {
+        btn.disabled = false; btn.textContent = prev;
+      }
     }
 
     document.getElementById('seg-personal').addEventListener('click', function () { state.audience = 'personal'; renderPricing(); });
@@ -846,7 +879,7 @@
     document.getElementById('co-plat-discord').addEventListener('click', function () { setPlatform('discord'); });
     document.getElementById('co-plat-telegram').addEventListener('click', function () { setPlatform('telegram'); });
     document.getElementById('checkout-card').addEventListener('click', function () { goPay('dodo'); });
-    document.getElementById('checkout-usdc').addEventListener('click', function () { goPay('loop'); });
+    document.getElementById('checkout-usdc').addEventListener('click', goPayMoonpay);
 
     renderPricing();
   })();

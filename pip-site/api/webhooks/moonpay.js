@@ -36,8 +36,21 @@ export default async function handler(req) {
   if (!GRANT_EVENTS.has(type)) return Response.json({ ok: true, ignored: type });
 
   const tx = evt.transactionObject || evt.data || evt;
-  const meta = tx.meta || tx.metadata || {};
   const cust = tx.customerDetails || tx.customer || {};
+  // Merchant metadata rides in `meta`; some Commerce charge APIs stash it under
+  // `additionalJSON` (on the tx or customerDetails, sometimes as a JSON string)
+  // instead — merge every shape so the handle/plan is found whichever is used.
+  const asObj = (v) => {
+    if (v && typeof v === 'object') return v;
+    if (typeof v === 'string') { try { return JSON.parse(v); } catch { return {}; } }
+    return {};
+  };
+  const meta = {
+    ...asObj(tx.additionalJSON),
+    ...asObj(cust.additionalJSON),
+    ...(tx.metadata || {}),
+    ...(tx.meta || {}),
+  };
 
   // Identity + plan travel in `meta` we set at checkout. Accept either a single
   // colon-packed ref ("discord:handle:plan:billing", mirrors the Loop path) or
