@@ -82,6 +82,49 @@ export async function verifyLoopWebhook(headers, rawBody, secret) {
   return safeEqual(received, toHex(mac)) || safeEqual(received, toBase64(mac));
 }
 
+/**
+ * Verify a MoonPay Commerce webhook. Commerce supports two auth schemes depending
+ * on how the webhook was created, so we accept whichever env is configured:
+ *   - Shared bearer token: an `Authorization: Bearer <token>` header issued at
+ *     webhook creation (set MOONPAY_WEBHOOK_TOKEN).
+ *   - Signature: a `Moonpay-Signature-V2: t=<ts>,s=<hexsig>` header — HMAC-SHA256
+ *     over `<ts>.<rawBody>`, hex-encoded, keyed by the per-webhook secret
+ *     (set MOONPAY_WEBHOOK_SECRET).
+ * Fails closed: if neither env is set, nothing can pass. If both are set, either
+ * one passing is enough (lets you migrate schemes without a gap).
+ */
+export async function verifyMoonpayWebhook(headers, rawBody, { token, secret }) {
+  // 1) Shared bearer token.
+  if (token) {
+    const presented = (headers.get('authorization') || '').replace(/^Bearer\s+/i, '').trim();
+    if (presented && safeEqual(presented, token)) return true;
+  }
+  // 2) Moonpay-Signature-V2 HMAC.
+  if (secret) {
+    const header = headers.get('moonpay-signature-v2');
+    if (header) {
+      let ts, sig;
+      for (const kv of header.split(',')) {
+        const i = kv.indexOf('=');
+        if (i < 0) continue;
+        const k = kv.slice(0, i).trim();
+        const v = kv.slice(i + 1).trim();
+        if (k === 't') ts = v;
+        else if (k === 's') sig = v.toLowerCase();
+      }
+      if (ts && sig) {
+        // Reject stale deliveries (replay window: 5 minutes).
+        const age = Math.abs(Date.now() / 1000 - Number(ts));
+        if (Number.isFinite(age) && age <= 300) {
+          const expected = toHex(await hmac(enc.encode(secret), `${ts}.${rawBody}`));
+          if (safeEqual(sig, expected)) return true;
+        }
+      }
+    }
+  }
+  return false;
+}
+
 // ---- access grant (Supabase REST) ------------------------------------------
 
 const DAY = 86_400_000;
