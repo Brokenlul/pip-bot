@@ -125,8 +125,9 @@
   .seg-btn { font-family: 'Geist', system-ui, sans-serif; font-size: 14px; font-weight: 500; padding: 8px 18px; border-radius: 999px; border: none; cursor: pointer; white-space: nowrap; background: transparent; color: var(--muted); transition: background 200ms ease-out, color 200ms ease-out; }
   .seg-btn.active { background: #FFFFFF; color: var(--ink); box-shadow: 0 2px 8px rgba(8,22,15,0.08); }
 
-  .pricing-card { position: relative; background: #FFFFFF; border: 1px solid var(--border); border-radius: 18px; padding: 34px; display: flex; flex-direction: column; gap: 16px; box-shadow: 0 12px 32px -20px rgba(14,59,38,0.18); transition: transform 200ms ease-out, box-shadow 200ms ease-out; }
-  .pricing-card.popular { border: 1.5px solid var(--green); box-shadow: 0 24px 56px -22px rgba(18,161,90,0.35); transform: scale(1.03); }
+  .pricing-card { position: relative; background: #FFFFFF; border: 1px solid var(--border); border-radius: 22px; padding: 36px 30px 26px; display: flex; flex-direction: column; box-shadow: 0 10px 30px -20px rgba(14,59,38,0.16); transition: transform 200ms ease-out, box-shadow 200ms ease-out; }
+  .pricing-card:hover { transform: translateY(-3px); }
+  .pricing-card.popular { border: 2px solid var(--ink); box-shadow: 0 22px 50px -24px rgba(8,22,15,0.30); }
   @media (max-width: 900px) { .pricing-card.popular { transform: none; } }
 
   /* The memory-steps "timeline" (shared connector line + dots aligned to a
@@ -139,11 +140,12 @@
     .step-col { padding-top: 0 !important; }
     .step-dot { position: static !important; margin-bottom: 4px; }
   }
-  .pricing-cta { text-align: center; text-decoration: none; font-size: 15px; font-weight: 500; border-radius: 10px; transition: background 200ms ease-out, border-color 200ms ease-out, color 200ms ease-out; display: block; cursor: pointer; }
-  .pricing-cta.filled { background: var(--green); color: #FFFFFF; padding: 13px 24px; border: 1.5px solid var(--green); }
+  .pricing-cta { text-align: center; text-decoration: none; font-size: 15.5px; font-weight: 600; border-radius: 999px; transition: background 200ms ease-out, border-color 200ms ease-out, color 200ms ease-out, transform 120ms ease-out; display: block; cursor: pointer; }
+  .pricing-cta:active { transform: scale(0.99); }
+  .pricing-cta.filled { background: var(--green); color: #FFFFFF; padding: 16px 24px; border: 2px solid var(--green); }
   .pricing-cta.filled:hover { background: var(--green-bright); border-color: var(--green-bright); }
-  .pricing-cta.outline { background: transparent; color: var(--ink); padding: 12px 24px; border: 1px solid var(--border); }
-  .pricing-cta.outline:hover { border-color: var(--green); color: var(--green); }
+  .pricing-cta.outline { background: transparent; color: var(--ink); padding: 15px 24px; border: 1.5px solid var(--ink); }
+  .pricing-cta.outline:hover { background: rgba(8,22,15,0.04); border-color: var(--ink); color: var(--ink); }
 
   .checkout-overlay { position: fixed; inset: 0; z-index: 100; background: rgba(8,22,15,0.5); backdrop-filter: blur(4px); -webkit-backdrop-filter: blur(4px); display: flex; align-items: center; justify-content: center; padding: 24px; animation: fadeUp 220ms ease-out both; }
   .checkout-modal { width: 100%; max-width: 420px; background: #FFFFFF; border: 1px solid var(--border); border-radius: 20px; box-shadow: 0 32px 80px -24px rgba(8,22,15,0.5); padding: 32px; display: flex; flex-direction: column; gap: 20px; }
@@ -195,7 +197,7 @@
       </div>
       <div style="width: 1px; height: 20px; background: var(--border);"></div>
       <div style="display: flex; align-items: center; gap: 6px;">
-        <a href="https://discord.gg/b6uzDj4Pqc" title="Discord" target="_blank" rel="noopener" class="social-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M19.27 5.33A18.27 18.27 0 0 0 14.5 3.8a.07.07 0 0 0-.08.04c-.2.36-.43.83-.59 1.2a16.9 16.9 0 0 0-5.66 0 12 12 0 0 0-.6-1.2.08.08 0 0 0-.08-.04A18.2 18.2 0 0 0 2.72 5.33a.07.07 0 0 0-.03.03C.35 8.9-.21 12.36.07 15.79a.08.08 0 0 0 .03.05 18.4 18.4 0 0 0 5.53 2.8.08.08 0 0 0 .08-.03c.43-.58.8-1.2 1.13-1.84a.07.07 0 0 0-.04-.1 12.1 12.1 0 0 1-1.73-.83.08.08 0 0 1-.01-.13c.12-.09.23-.18.34-.27a.07.07 0 0 1 .08-.01c3.63 1.66 7.56 1.66 11.15 0a.07.07 0 0 1 .08.01c.11.09.22.18.34.27a.08.08 0 0 1-.01.13c-.55.32-1.13.6-1.73.83a.08.08 0 0 0-.04.1c.34.64.71 1.26 1.13 1.84a.07.07 0 0 0 .08.03 18.3 18.3 0 0 0 5.54-2.8.08.08 0 0 0 .03-.05c.33-3.97-.55-7.4-2.32-10.43a.06.06 0 0 0-.03-.03ZM8.02 13.74c-1.09 0-1.99-1-1.99-2.23 0-1.22.88-2.23 1.99-2.23 1.12 0 2.01 1.02 1.99 2.23 0 1.23-.87 2.23-1.99 2.23Zm7.15 0c-1.09 0-1.99-1-1.99-2.23 0-1.22.88-2.23 1.99-2.23 1.12 0 2 1.02 1.99 2.23 0 1.23-.87 2.23-1.99 2.23Z" fill="currentColor"/></svg></a>
+        <a href="https://discord.gg/47kcGbct" title="Discord" target="_blank" rel="noopener" class="social-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M19.27 5.33A18.27 18.27 0 0 0 14.5 3.8a.07.07 0 0 0-.08.04c-.2.36-.43.83-.59 1.2a16.9 16.9 0 0 0-5.66 0 12 12 0 0 0-.6-1.2.08.08 0 0 0-.08-.04A18.2 18.2 0 0 0 2.72 5.33a.07.07 0 0 0-.03.03C.35 8.9-.21 12.36.07 15.79a.08.08 0 0 0 .03.05 18.4 18.4 0 0 0 5.53 2.8.08.08 0 0 0 .08-.03c.43-.58.8-1.2 1.13-1.84a.07.07 0 0 0-.04-.1 12.1 12.1 0 0 1-1.73-.83.08.08 0 0 1-.01-.13c.12-.09.23-.18.34-.27a.07.07 0 0 1 .08-.01c3.63 1.66 7.56 1.66 11.15 0a.07.07 0 0 1 .08.01c.11.09.22.18.34.27a.08.08 0 0 1-.01.13c-.55.32-1.13.6-1.73.83a.08.08 0 0 0-.04.1c.34.64.71 1.26 1.13 1.84a.07.07 0 0 0 .08.03 18.3 18.3 0 0 0 5.54-2.8.08.08 0 0 0 .03-.05c.33-3.97-.55-7.4-2.32-10.43a.06.06 0 0 0-.03-.03ZM8.02 13.74c-1.09 0-1.99-1-1.99-2.23 0-1.22.88-2.23 1.99-2.23 1.12 0 2.01 1.02 1.99 2.23 0 1.23-.87 2.23-1.99 2.23Zm7.15 0c-1.09 0-1.99-1-1.99-2.23 0-1.22.88-2.23 1.99-2.23 1.12 0 2 1.02 1.99 2.23 0 1.23-.87 2.23-1.99 2.23Z" fill="currentColor"/></svg></a>
         <a href="https://t.me/pipinvestbot" title="Telegram" target="_blank" rel="noopener" class="social-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M21.05 3.35 2.7 10.42c-1.25.5-1.24 1.18-.23 1.49l4.7 1.47 1.8 5.53c.22.6.37.84.75.84.3 0 .43-.13.6-.3l1.65-1.6 3.42 2.53c.63.35 1.08.17 1.24-.58l2.24-10.55c.24-1.02-.4-1.48-1.02-1.9Zm-12.86 8.9-1.9-.6L18.4 6.1c.32-.19.62-.09.37.12L8.19 12.25Zm.6 4.16-.72-2.31 8.63-5.4c.28-.17.53-.08.32.11l-6.84 6.14-.55 1.83-.84 0Z" fill="currentColor"/></svg></a>
         <a href="https://x.com/pipinvestbot" title="X" target="_blank" rel="noopener" class="social-icon"><svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M14.28 10.16 22.98 0h-2.06l-7.55 8.82L7.34 0H.5l9.13 13.34L.5 24h2.06l7.98-9.32L17.16 24h6.84l-9.72-13.84Zm-2.82 3.3-.92-1.32L3.56 1.56h3.17l5.94 8.5.92 1.31 7.72 11.05h-3.17l-6.3-9Z" fill="currentColor"/></svg></a>
       </div>
@@ -541,7 +543,7 @@
 
     <div style="max-width: 1080px; margin: 40px auto 0;">
       <div id="pricing-cards" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(min(280px, 100%), 1fr)); gap: 20px; align-items: stretch;"></div>
-      <p style="margin: 32px 0 0; text-align: center; font-size: 14px; color: var(--muted);">Every plan starts with a free trial. No card required.</p>
+      <p style="margin: 32px 0 0; text-align: center; font-size: 14px; color: var(--muted);">Paid plans include a 7-day free trial — no commitment, cancel anytime.</p>
     </div>
   </section>
 
@@ -598,7 +600,7 @@
         <a href="/privacy" class="footer-link">Privacy</a>
         <a href="/terms" class="footer-link">Terms</a>
         <a href="https://x.com/pipinvestbot" target="_blank" rel="noopener" class="footer-link">X</a>
-        <a href="https://discord.gg/b6uzDj4Pqc" target="_blank" rel="noopener" class="footer-link">Discord</a>
+        <a href="https://discord.gg/47kcGbct" target="_blank" rel="noopener" class="footer-link">Discord</a>
         <a href="https://t.me/pipinvestbot" target="_blank" rel="noopener" class="footer-link">Telegram</a>
       </div>
       <span>pipinvest.xyz</span>
@@ -631,7 +633,7 @@
     var LINKS = {
       discordInvite: 'https://discord.com/oauth2/authorize?client_id=1521437096294744216&scope=bot&permissions=274878024768',
       telegram: 'https://t.me/pipinvestbot',
-      community: 'https://discord.gg/b6uzDj4Pqc'
+      community: 'https://discord.gg/47kcGbct'
     };
 
     // ============================================================
@@ -683,17 +685,17 @@
     }
 
     var personalPlans = [
-      { name: 'FREE', isFree: true, tagline: 'Try Pip one-on-one.', cta: 'Start free',
+      { name: 'FREE', isFree: true, tagline: 'Try Pip one-on-one.', cta: 'Add Pip free',
         features: ['Grounded answers, always cited', 'Live price, funding & macro data', '5 questions / day'] },
-      { name: 'LITE', slug: 'personal-lite', monthly: 12, yearly: 10, tagline: "The everyday trader's desk.", cta: 'Start free',
+      { name: 'LITE', slug: 'personal-lite', monthly: 12, yearly: 10, tagline: "The everyday trader's desk.", cta: 'Get the daily edge',
         features: ['Fast grounded reads on price & macro', "Live funding & open-interest, Pip's sharpest signal", 'Personal memory & watchlist recall', 'Generous daily limit'] },
-      { name: 'PRO', slug: 'personal-pro', monthly: 19, yearly: 16, popular: true, tagline: 'Full reasoning, full memory.', cta: 'Start 7-day free trial',
+      { name: 'PRO', slug: 'personal-pro', monthly: 19, yearly: 16, popular: true, tagline: 'Full reasoning, full memory.', cta: 'Unlock the full read',
         features: ['Everything in Lite', 'Deep multi-source reasoning', 'Daily deltas on what you track', 'Chart-screenshot reads & deeper scans', 'Priority speed'] }
     ];
     var serverPlans = [
-      { name: 'FREE', isFree: true, tagline: 'Give your server a taste.', cta: 'Add to server',
+      { name: 'FREE', isFree: true, tagline: 'Give your server a taste.', cta: 'Add Pip free',
         features: ['Grounded, cited answers in-channel', 'Live price, funding & macro data', '25 questions / server / day'] },
-      { name: 'PRO', slug: 'server-pro', monthly: 29, yearly: 24, popular: true, tagline: 'The research desk for active communities.', cta: 'Start 7-day free trial',
+      { name: 'PRO', slug: 'server-pro', monthly: 29, yearly: 24, popular: true, tagline: 'The research desk for active communities.', cta: 'Get the research desk',
         features: ['No daily ceiling to worry about', 'Live funding & OI reads', "Per-server memory that learns your community's watchlists", 'Auto-reads tickers & contracts dropped in chat'] },
       { name: 'ELITE', monthly: 99, yearly: 82, tagline: 'For large & alpha communities.', cta: 'Talk to us',
         features: ['Everything in Pro', 'Built for high-volume servers', 'Scheduled briefings & event alerts (CPI, FOMC)', "Custom persona in your community's voice", 'Priority support & early features'] }
@@ -723,31 +725,36 @@
     function cardHtml(plan, idx) {
       var cls = 'pricing-card' + (plan.popular ? ' popular' : '');
       var badge = plan.popular
-        ? '<span class="mono" style="position:absolute; top:-11px; left:32px; font-size:11px; letter-spacing:0.12em; background: var(--green); color:#FFFFFF; border-radius:999px; padding:4px 12px;">MOST POPULAR</span>'
+        ? '<span class="mono" style="position:absolute; top:-12px; left:30px; font-size:11px; letter-spacing:0.12em; background: var(--green); color:#FFFFFF; border-radius:999px; padding:5px 13px;">MOST POPULAR</span>'
         : '';
       var noteHtml = plan.hasNote
-        ? '<span class="mono" style="font-size:12px; color: var(--muted);">' + esc(plan.priceNote) + '</span>'
+        ? '<div class="mono" style="font-size:12.5px; color: var(--muted); margin-top:8px;">' + esc(plan.priceNote) + '</div>'
         : '';
+      var check = '<svg width="17" height="17" viewBox="0 0 17 17" fill="none" style="flex-shrink:0; margin-top:2px;"><path d="M3.5 9l3 3 7-8" stroke="var(--green)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
       var featuresHtml = plan.features.map(function (f) {
-        return '<div style="display:flex; gap:10px; line-height:1.4;"><span style="color: var(--green); flex-shrink:0;">⟩</span><span>' + esc(f) + '</span></div>';
+        return '<div style="display:flex; gap:11px; line-height:1.45; align-items:flex-start;">' + check + '<span>' + esc(f) + '</span></div>';
       }).join('');
       var ctaClass = plan.popular ? 'pricing-cta filled' : 'pricing-cta outline';
-      var nameColor = plan.popular ? 'var(--green)' : 'var(--muted)';
+      var nameColor = plan.popular ? 'var(--green)' : 'var(--ink)';
+      var footer = plan.ctaKind === 'free' ? 'Free for 7 days · no card'
+        : plan.ctaKind === 'contact' ? "Custom terms — let's talk"
+        : 'No commitment · cancel anytime';
       var ctaAttr = plan.ctaKind === 'checkout'
         ? (' href="#" data-plan-idx="' + idx + '"')
         : (' href="' + esc(plan.href) + '"' + (plan.href.indexOf('http') === 0 ? ' target="_blank" rel="noopener"' : ''));
       return (
         '<div class="' + cls + '">' + badge +
-        '<div class="mono" style="font-size:12px; letter-spacing:0.14em; color:' + nameColor + ';">' + esc(plan.name) + '</div>' +
-        '<div style="display:flex; align-items:baseline; gap:10px; flex-wrap:wrap;">' +
-          '<div class="mono" style="font-size:44px; font-weight:600; letter-spacing:-0.02em;">' + esc(plan.priceMain) +
-          '<span style="font-size:15px; color: var(--muted); font-weight:400;"> ' + esc(plan.priceSuffix) + '</span></div>' +
-          noteHtml +
+        '<div style="font-size:23px; font-weight:600; letter-spacing:-0.02em; text-transform:lowercase; color:' + nameColor + ';">' + esc(plan.name) + '</div>' +
+        '<div style="display:flex; align-items:baseline; gap:6px; margin-top:14px;">' +
+          '<span style="font-size:58px; font-weight:700; letter-spacing:-0.04em; line-height:1;">' + esc(plan.priceMain) + '</span>' +
+          '<span class="mono" style="font-size:15px; color: var(--muted);">' + esc(plan.priceSuffix) + '</span>' +
         '</div>' +
-        '<div style="font-size:15px; color:#14342A; font-weight:500; min-height:22px;">' + esc(plan.tagline) + '</div>' +
-        '<div style="height:1px; background:#EAF1E4;"></div>' +
-        '<div style="display:flex; flex-direction:column; gap:12px; font-size:14px; color: var(--muted); flex:1;">' + featuresHtml + '</div>' +
-        '<a class="' + ctaClass + '"' + ctaAttr + '>' + esc(plan.cta) + '</a>' +
+        noteHtml +
+        '<div style="font-size:15px; line-height:1.5; color:#3a4d43; font-weight:500; margin-top:16px; min-height:45px;">' + esc(plan.tagline) + '</div>' +
+        '<div style="height:1px; background:#EAF1E4; margin:22px 0;"></div>' +
+        '<div style="display:flex; flex-direction:column; gap:13px; font-size:14.5px; color:#243530; flex:1;">' + featuresHtml + '</div>' +
+        '<a class="' + ctaClass + '" style="margin-top:26px;"' + ctaAttr + '>' + esc(plan.cta) + '</a>' +
+        '<div class="mono" style="text-align:center; font-size:11.5px; color: var(--muted); margin-top:12px;">' + footer + '</div>' +
         '</div>'
       );
     }
