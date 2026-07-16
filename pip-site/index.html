@@ -162,6 +162,12 @@
   .checkout-alt:disabled:hover { border-color: var(--border); color: var(--ink); }
   .seg-group.full { display: flex; width: 100%; }
   .seg-group.full .seg-btn { flex: 1; text-align: center; }
+  /* On phones the audience + billing toggles can't shrink (nowrap "Save ~15%"),
+     so side-by-side they overflow the viewport and the whole row looks
+     left-shifted. Stack them vertically and keep both centered. */
+  @media (max-width: 640px) {
+    .pricing-toggles { flex-direction: column !important; }
+  }
 
   /* Single-line terminal treatment. On phones the sentence doesn't fit, and
      truncating hides both the question and the blinking caret — so wrap there. */
@@ -527,7 +533,7 @@
       <p style="margin: 16px 0 0; max-width: 460px; font-size: 16px; line-height: 1.55; color: var(--muted);">Grounded market reads, everywhere you trade. Start free, no card needed.</p>
     </div>
 
-    <div style="max-width: 1080px; margin: 40px auto 0; display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 16px;">
+    <div class="pricing-toggles" style="max-width: 1080px; margin: 40px auto 0; display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 16px;">
       <div class="seg-group">
         <button type="button" id="seg-personal" class="seg-btn">Personal · DM</button>
         <button type="button" id="seg-server" class="seg-btn">Server</button>
