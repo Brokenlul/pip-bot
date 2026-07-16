@@ -1,331 +1,330 @@
-// Pip Beta Dashboard — a single zero-dependency Vercel serverless function that
-// reads usage_log + feedback + beta_testers from Supabase (server-side, service
-// key never leaves the function) and renders the pilot success metrics, with
-// founder vs tester vs guest differentiation. Auto-refreshes every 60s.
-//
-// Env: SUPABASE_URL, SUPABASE_SECRET_KEY (required); FOUNDER_DISCORD_ID,
-// DASHBOARD_TOKEN, BETA_ENDS_AT, BETA_DAILY_SPEND_USD, BETA_DAILY_GLOBAL_MSGS,
-// BETA_GUILD_DAILY_SPEND_USD (per-server cap, mirror of the bot's value).
+// Pip admin console — a single zero-dependency Vercel function that routes to
+// six server-rendered views (overview, payments, trials, activity, users,
+// errors) behind a cookie login. Reads Supabase + the Dodo/MoonPay payment
+// APIs server-side; keys never reach the browser.
+const R = require('./_render.js');
+const D = require('./_data.js');
 
-const crypto = require('node:crypto');
-
-// Fail-closed gate. The dashboard reads all beta data with the Supabase service
-// key (bypasses RLS), so this token is the ONLY thing protecting user_id /
-// guild_id / spend from anyone who finds the URL. If DASHBOARD_TOKEN is not set
-// we deny access rather than serving everything, and the compare is constant-time.
-function tokenOk(provided, expected) {
-  if (!expected) return false; // no token configured → no access (fail closed)
-  const a = Buffer.from(String(provided));
-  const b = Buffer.from(String(expected));
-  if (a.length !== b.length) return false;
-  return crypto.timingSafeEqual(a, b);
-}
-
-const SPEND_CAP = Number(process.env.BETA_DAILY_SPEND_USD || 18);
-const MSG_CAP = Number(process.env.BETA_DAILY_GLOBAL_MSGS || 350);
-const GUILD_CAP = Number(process.env.BETA_GUILD_DAILY_SPEND_USD || 10);
-const FOUNDER_KEYS = new Set(
-  [
-    process.env.FOUNDER_DISCORD_ID ? `discord:${process.env.FOUNDER_DISCORD_ID}` : null,
-    process.env.FOUNDER_TELEGRAM_ID ? `telegram:${process.env.FOUNDER_TELEGRAM_ID}` : null,
-  ].filter(Boolean),
-);
-const isFounder = (k) => FOUNDER_KEYS.has(k);
-const BETA_ENDS = process.env.BETA_ENDS_AT ? new Date(process.env.BETA_ENDS_AT) : null;
-
-module.exports = async function handler(req, res) {
-  const token = process.env.DASHBOARD_TOKEN;
-  if (!tokenOk(req.query.key || '', token)) {
-    const msg = token
-      ? `Add <code>?key=…</code> to view.`
-      : `Dashboard is locked. Set <code>DASHBOARD_TOKEN</code> in the environment, then open <code>?key=…</code>.`;
-    return send(res, token ? 401 : 503, page('Locked', `<div class="card"><p class="muted">${msg}</p></div>`));
-  }
-  const url = process.env.SUPABASE_URL;
-  const key = process.env.SUPABASE_SECRET_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY;
-  if (!url || !key) {
-    return send(res, 500, page('Config', `<div class="card"><p class="muted">Set SUPABASE_URL and SUPABASE_SECRET_KEY in Vercel.</p></div>`));
-  }
-
-  const weekAgo = new Date(Date.now() - 7 * 864e5).toISOString();
-  let rows = [], testers = [], feedback = [];
-  try {
-    rows = await sb(url, key, `usage_log?select=created_at,platform,user_id,guild_id,cost_usd,tools_used,had_vision,web_searches,degraded,cache_hit,latency_ms,failed&created_at=gte.${weekAgo}&order=created_at.desc&limit=50000`);
-    testers = await sb(url, key, `beta_testers?select=platform,platform_id,name`);
-    feedback = await sb(url, key, `feedback?select=platform,rater_id,rating&created_at=gte.${weekAgo}`);
-  } catch (e) {
-    // Log the real cause server-side; don't render Supabase/Postgres error text
-    // (can leak schema detail) to the page.
-    console.error('[dashboard] Supabase query failed:', e && e.message ? e.message : e);
-    return send(res, 502, page('Error', `<div class="card"><p class="clay">Could not load analytics right now. Check the server logs.</p></div>`));
-  }
-
-  res.setHeader('cache-control', 'no-store');
-  send(res, 200, render(metrics(rows, testers, feedback)));
+const FOUNDER_KEYS = new Set([
+  process.env.FOUNDER_DISCORD_ID ? `discord:${process.env.FOUNDER_DISCORD_ID}` : null,
+  process.env.FOUNDER_TELEGRAM_ID ? `telegram:${process.env.FOUNDER_TELEGRAM_ID}` : null,
+].filter(Boolean));
+const CAPS = {
+  spend: Number(process.env.BETA_DAILY_SPEND_USD || 18),
+  msgs: Number(process.env.BETA_DAILY_GLOBAL_MSGS || 350),
 };
 
-// ---- Supabase REST ---------------------------------------------------------
-async function sb(url, key, path) {
-  const r = await fetch(`${url}/rest/v1/${path}`, { headers: { apikey: key, authorization: `Bearer ${key}` } });
-  if (!r.ok) throw new Error(`HTTP ${r.status} ${await r.text()}`);
-  return r.json();
-}
-function send(res, code, html) {
-  res.statusCode = code;
-  res.setHeader('content-type', 'text/html; charset=utf-8');
-  res.end(html);
-}
+module.exports = async function handler(req, res) {
+  const url = new URL(req.url, 'http://x');
+  const path = url.pathname.replace(/\/+$/, '') || '/';
+  req.query = req.query || Object.fromEntries(url.searchParams);
 
-// ---- Metrics ---------------------------------------------------------------
-const dayKey = (iso) => iso.slice(0, 10);
-const median = (a) => { if (!a.length) return null; const s = [...a].sort((x, y) => x - y); const m = s.length >> 1; return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2; };
-const p95 = (a) => { if (!a.length) return null; const s = [...a].sort((x, y) => x - y); return s[Math.min(s.length - 1, Math.ceil(0.95 * s.length) - 1)]; };
-
-function metrics(rows, testers, feedback) {
-  const now = new Date();
-  const dayStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate())).toISOString();
-  const testerSet = new Set(testers.map((t) => `${t.platform}:${t.platform_id}`));
-  // Display names from the allowlist (auto-enroll stores the platform username).
-  const nameOf = new Map(testers.filter((t) => t.name).map((t) => [`${t.platform}:${t.platform_id}`, t.name]));
-  const roleOf = (r) => { const k = `${r.platform}:${r.user_id}`; return isFounder(k) ? 'founder' : testerSet.has(k) ? 'tester' : 'guest'; };
-  for (const r of rows) r._role = roleOf(r);
-
-  const sum = (a, f) => a.reduce((s, r) => s + (Number(f(r)) || 0), 0);
-  const today = rows.filter((r) => r.created_at >= dayStart);
-  const spendByRole = (role) => sum(today.filter((r) => r._role === role), (r) => r.cost_usd);
-
-  // surface split (today)
-  const dm = today.filter((r) => String(r.guild_id).startsWith('dm:'));
-  const srv = today.filter((r) => !String(r.guild_id).startsWith('dm:'));
-
-  // per-server spend (today) — each guild has its own daily cap in the gate
-  const byGuild = new Map();
-  for (const r of srv) {
-    const g = byGuild.get(r.guild_id) || { id: String(r.guild_id), msgs: 0, spend: 0 };
-    g.msgs++; g.spend += Number(r.cost_usd) || 0;
-    byGuild.set(r.guild_id, g);
+  // ---- auth-free routes ----
+  if (path === '/login') {
+    if ((req.method || 'GET').toUpperCase() === 'POST') {
+      const body = await readBody(req);
+      const password = new URLSearchParams(body).get('password') || '';
+      if (R.passwordOk(password)) {
+        res.statusCode = 302;
+        res.setHeader('set-cookie', R.loginCookieHeader());
+        res.setHeader('location', '/');
+        return res.end();
+      }
+      return R.send(res, 401, loginPage('Wrong password.'));
+    }
+    return R.send(res, 200, loginPage());
   }
-  const guildsToday = [...byGuild.values()].sort((a, b) => b.spend - a.spend);
-
-  // ---- pilot metrics over TESTERS only -----------------------------------
-  const tRows = rows.filter((r) => r._role === 'tester');
-  const totalTesters = testerSet.size;
-  const byTester = new Map();
-  for (const r of tRows) {
-    const k = `${r.platform}:${r.user_id}`;
-    const u = byTester.get(k) || { rows: [], days: new Set(), firstAt: r.created_at };
-    u.rows.push(r);
-    u.days.add(dayKey(r.created_at));
-    if (r.created_at < u.firstAt) u.firstAt = r.created_at;
-    byTester.set(k, u);
+  if (path === '/logout') {
+    res.statusCode = 302;
+    res.setHeader('set-cookie', R.logoutCookieHeader());
+    res.setHeader('location', '/login');
+    return res.end();
   }
-  const activeTesters = [...byTester.values()];
 
-  // Activation: asked ≥3 in first 48h since their first message.
-  const activated = activeTesters.filter((u) => {
-    const cut = new Date(new Date(u.firstAt).getTime() + 48 * 3600e3).toISOString();
-    return u.rows.filter((r) => r.created_at <= cut).length >= 3;
+  // ---- gate ----
+  if (!R.isAuthed(req)) {
+    res.statusCode = 302;
+    res.setHeader('location', '/login');
+    return res.end();
+  }
+
+  const view = path === '/' ? 'overview' : path.slice(1);
+  try {
+    switch (view) {
+      case 'overview': return R.send(res, 200, await viewOverview());
+      case 'payments': return R.send(res, 200, await viewPayments());
+      case 'trials': return R.send(res, 200, await viewTrials());
+      case 'activity': return R.send(res, 200, await viewActivity());
+      case 'users': return R.send(res, 200, await viewUsers(req.query.id, req.query.q));
+      case 'errors': return R.send(res, 200, await viewErrors());
+      default:
+        return R.send(res, 404, R.shell({ title: 'Not found', active: '', body: `<div class="card"><p class="muted">No such view.</p></div>` }));
+    }
+  } catch (e) {
+    console.error('[admin] view error:', e && e.message ? e.message : e);
+    return R.send(res, 502, R.shell({ title: 'Error', active: view, body: `<div class="card"><p class="bad">Could not load this view right now. Check the server logs.</p></div>` }));
+  }
+};
+
+// ---- body reader (works on Vercel's parsed body and raw dev-server stream) --
+async function readBody(req) {
+  if (req.body != null) {
+    if (typeof req.body === 'string') return req.body;
+    if (typeof req.body === 'object') return new URLSearchParams(req.body).toString();
+  }
+  return new Promise((resolve) => {
+    let d = ''; req.on('data', (c) => (d += c)); req.on('end', () => resolve(d)); req.on('error', () => resolve(''));
   });
-  const activationPct = totalTesters ? activated.length / totalTesters : null;
-
-  // Engagement: median questions per (tester, active day).
-  const perUserDay = new Map();
-  for (const r of tRows) { const k = `${r.platform}:${r.user_id}|${dayKey(r.created_at)}`; perUserDay.set(k, (perUserDay.get(k) || 0) + 1); }
-  const engagement = median([...perUserDay.values()]);
-
-  // Retention: median active days out of 7 (across active testers).
-  const retentionDays = median(activeTesters.map((u) => u.days.size));
-
-  // Day-7 / latest-day return: of activated testers, % active on the last day.
-  const lastDay = dayKey((BETA_ENDS && BETA_ENDS < now ? new Date(BETA_ENDS - 1) : now).toISOString());
-  const returned = activated.filter((u) => u.days.has(lastDay)).length;
-  const day7 = activated.length ? returned / activated.length : null;
-
-  // Quality: 👍/👎 from tester raters.
-  const tFeed = feedback.filter((f) => { const k = `${f.platform}:${f.rater_id}`; return !isFounder(k) && testerSet.has(k); });
-  const up = tFeed.filter((f) => f.rating === 'up').length;
-  const down = tFeed.filter((f) => f.rating === 'down').length;
-  const quality = up + down ? up / (up + down) : null;
-
-  // Failed rate + ops (testers).
-  const failedRate = tRows.length ? tRows.filter((r) => r.failed).length / tRows.length : null;
-  const nonHit = tRows.filter((r) => !r.cache_hit);
-  const costPerMsg = tRows.length ? sum(tRows, (r) => r.cost_usd) / tRows.length : null;
-  const lat = nonHit.map((r) => Number(r.latency_ms) || 0).filter((x) => x > 0);
-  const p95Latency = p95(lat);
-
-  // week rollups (all roles)
-  const weekSpend = sum(rows, (r) => r.cost_usd);
-  const cacheHits = rows.filter((r) => r.cache_hit).length;
-  const days = [];
-  for (let i = 6; i >= 0; i--) {
-    const d = new Date(Date.now() - i * 864e5).toISOString().slice(0, 10);
-    days.push({ day: d, spend: sum(rows.filter((r) => dayKey(r.created_at) === d), (r) => r.cost_usd) });
-  }
-
-  // per-user table (today), with role
-  const byUserToday = new Map();
-  for (const r of today) {
-    const u = byUserToday.get(`${r.platform}:${r.user_id}`) || {
-      id: r.user_id,
-      name: nameOf.get(`${r.platform}:${r.user_id}`) || null,
-      role: r._role, msgs: 0, spend: 0, searches: 0, scans: 0, vision: 0,
-    };
-    u.msgs++; u.spend += Number(r.cost_usd) || 0; u.searches += Number(r.web_searches) || 0;
-    u.scans += (r.tools_used || []).includes('token_scan') ? 1 : 0; u.vision += r.had_vision ? 1 : 0;
-    byUserToday.set(`${r.platform}:${r.user_id}`, u);
-  }
-  const usersToday = [...byUserToday.values()].sort((a, b) => b.spend - a.spend);
-
-  const tools = new Map();
-  for (const r of rows) for (const t of r.tools_used || []) tools.set(t, (tools.get(t) || 0) + 1);
-  const topTools = [...tools.entries()].sort((a, b) => b[1] - a[1]).slice(0, 8);
-
-  return {
-    updated: now,
-    todaySpend: sum(today, (r) => r.cost_usd), todayMsgs: today.length,
-    activeTestersToday: new Set(today.filter((r) => r._role === 'tester').map((r) => r.user_id)).size,
-    totalTesters,
-    spend: { founder: spendByRole('founder'), tester: spendByRole('tester'), guest: spendByRole('guest') },
-    surface: { dm: dm.length, srv: srv.length, dmSpend: sum(dm, (r) => r.cost_usd), srvSpend: sum(srv, (r) => r.cost_usd) },
-    weekSpend, weekMsgs: rows.length, cacheRate: rows.length ? cacheHits / rows.length : 0,
-    days, usersToday, topTools, guildsToday,
-    up, down,
-    stack: [
-      metricRow('Activation', 'Asked ≥3 questions in first 48h', activationPct == null ? '—' : `${activated.length}/${totalTesters} · ${pct(activationPct)}`, activationPct != null && activationPct >= 0.8, '≥80%'),
-      metricRow('Engagement', 'Median questions / user / active day', engagement == null ? '—' : engagement.toFixed(1), engagement != null && engagement >= 5 && engagement <= 8, '5–8'),
-      metricRow('Retention', 'Median active days out of 7', retentionDays == null ? '—' : retentionDays.toFixed(1), retentionDays != null && retentionDays >= 4, '≥4'),
-      metricRow('Retention', 'Day-7 return (active on last day)', day7 == null ? '—' : pct(day7), day7 != null && day7 >= 0.5, '≥50%'),
-      metricRow('Quality', '👍 / 👎 ratio on answers', quality == null ? '— (no votes yet)' : pct(quality), quality != null && quality >= 0.8, '≥80% positive'),
-      metricRow('Quality', 'Failed / unanswerable rate', failedRate == null ? '—' : pct(failedRate), failedRate != null && failedRate < 0.1, '<10%'),
-      metricRow('Ops', 'Actual cost / message', costPerMsg == null ? '—' : usd4(costPerMsg), costPerMsg != null && costPerMsg <= 0.06, '≤$0.06'),
-      metricRow('Ops', 'p95 answer latency', p95Latency == null ? '—' : `${(p95Latency / 1000).toFixed(1)}s`, p95Latency != null && p95Latency < 10000, '<10s'),
-    ],
-  };
 }
-function metricRow(layer, metric, value, ok, target) { return { layer, metric, value, ok, target }; }
 
-// ---- Render ----------------------------------------------------------------
-const usd = (n) => `$${(Number(n) || 0).toFixed(2)}`;
-const usd4 = (n) => `$${(Number(n) || 0).toFixed(4)}`;
-const pct = (n) => `${Math.round((Number(n) || 0) * 100)}%`;
-const esc = (s) => String(s).replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
-const barColor = (f) => (f >= 0.8 ? 'var(--clay)' : f >= 0.5 ? '#C98A1E' : 'var(--green)');
-const roleTag = (r) => `<span class="tag ${r}">${r === 'founder' ? '♛ founder' : r === 'tester' ? 'tester' : 'guest'}</span>`;
+// ---- small render helpers --------------------------------------------------
+const { esc, usd, usd4, pct, shortId, ago, ymd } = R;
+const card = (eyebrow, inner) => `<div class="card"><div class="eyebrow">${esc(eyebrow)}</div>${inner}</div>`;
+const stat = (label, value, sub) => `<div class="card stat"><div class="eyebrow">${esc(label)}</div><div class="big">${value}</div>${sub ? `<div class="muted">${sub}</div>` : ''}</div>`;
+const table = (heads, rows) => `<table><thead><tr>${heads.map((h) => `<th>${h}</th>`).join('')}</tr></thead><tbody>${rows || `<tr><td colspan="${heads.length}" class="muted">Nothing yet.</td></tr>`}</tbody></table>`;
+const barColor = (f) => (f >= 0.8 ? 'var(--clay)' : f >= 0.5 ? 'var(--gold)' : 'var(--green)');
+function subTag(kind) { return `<span class="tag ${kind}">${kind}</span>`; }
 
-function render(m) {
-  const spendFrac = SPEND_CAP ? m.todaySpend / SPEND_CAP : 0;
-  const msgFrac = MSG_CAP ? m.todayMsgs / MSG_CAP : 0;
+// ---- login -----------------------------------------------------------------
+function loginPage(err) {
+  return R.shell({
+    title: 'pip · admin — sign in', active: '',
+    body: `<div style="max-width:360px;margin:8vh auto 0"><div class="card">
+      <div class="eyebrow">Admin access</div>
+      ${err ? `<p class="bad" style="margin:0 0 12px">${esc(err)}</p>` : ''}
+      <form method="POST" action="/login" style="display:flex;flex-direction:column;gap:12px">
+        <input class="input" type="password" name="password" placeholder="Admin password" autofocus autocomplete="current-password">
+        <button class="btn" type="submit">Sign in</button>
+      </form>
+      <p class="muted" style="margin:12px 0 0;font-size:12.5px">This console shows private user + payment data. Founder only.</p>
+    </div></div>`,
+  });
+}
+
+// ---- 1. Overview -----------------------------------------------------------
+async function viewOverview() {
+  const [rows, testers, feedback] = await Promise.all([D.loadUsage(7), D.loadTesters(), D.loadFeedback(7)]);
+  const m = D.overviewMetrics(rows, testers, feedback, CAPS, FOUNDER_KEYS);
+  const spendFrac = CAPS.spend ? m.todaySpend / CAPS.spend : 0;
+  const msgFrac = CAPS.msgs ? m.todayMsgs / CAPS.msgs : 0;
   const maxDay = Math.max(0.01, ...m.days.map((d) => d.spend));
-
-  const stat = (label, value, sub) => `<div class="card stat"><div class="eyebrow">${esc(label)}</div><div class="big">${value}</div>${sub ? `<div class="muted">${sub}</div>` : ''}</div>`;
-  const meter = (label, frac, value, cap) => `
-    <div class="card stat"><div class="eyebrow">${esc(label)}</div>
-      <div class="big">${value}<span class="muted"> / ${cap}</span></div>
-      <div class="meter"><div class="fill" style="width:${Math.min(100, frac * 100).toFixed(1)}%;background:${barColor(frac)}"></div></div>
-      <div class="muted">${pct(frac)} of daily cap${frac >= 0.8 ? ' · degrade mode' : ''}</div></div>`;
-
-  const stackRows = m.stack.map((s) => `
-    <tr><td class="mono">${esc(s.layer)}</td><td>${s.metric}</td>
-      <td class="${s.ok ? 'ok' : s.value.startsWith('—') ? 'muted' : 'bad'}"><b>${s.value}</b></td>
-      <td class="muted">${esc(s.target)}</td>
-      <td>${s.value.startsWith('—') ? '<span class="muted">·</span>' : s.ok ? '<span class="ok">✓</span>' : '<span class="bad">✗</span>'}</td></tr>`).join('');
-
-  const manual = [
-    ['Love', 'Disappointment if Pip vanished ("very")', 'end survey', '≥40%'],
-    ['WTP', 'Soft-commits — "lock founding price"', 'count', '≥6/25'],
-    ['Virality', 'Unprompted screenshots / tweets / mentions', 'count artifacts', '≥5'],
-    ['Virality', '"Can I add Pip to my other server?" asks', 'count', '≥3'],
-  ].map((r) => `<tr><td class="mono">${r[0]}</td><td>${r[1]}</td><td class="muted">${r[2]}</td><td class="muted">${r[3]}</td></tr>`).join('');
-
-  const userRows = m.usersToday.length
-    ? m.usersToday.map((u) => `<tr><td class="mono" title="${esc(u.id)}">${esc(u.name || `${u.id.slice(0, 6)}…${u.id.slice(-4)}`)}</td><td>${roleTag(u.role)}</td><td>${u.msgs}</td><td>${usd4(u.spend)}</td><td>${u.searches}</td><td>${u.scans}</td><td>${u.vision}</td></tr>`).join('')
-    : `<tr><td colspan="7" class="muted">No activity today.</td></tr>`;
-  const toolRows = m.topTools.length
-    ? m.topTools.map(([t, c]) => `<tr><td class="mono">${esc(t)}</td><td>${c}</td></tr>`).join('')
-    : `<tr><td colspan="2" class="muted">No tool calls yet.</td></tr>`;
-  const guildRows = m.guildsToday.length
-    ? m.guildsToday.map((g) => {
-        const f = GUILD_CAP ? g.spend / GUILD_CAP : 0;
-        return `<tr><td class="mono">${esc(g.id)}</td><td>${g.msgs}</td><td>${usd4(g.spend)}</td>
-          <td style="min-width:140px"><div class="meter" style="margin:0"><div class="fill" style="width:${Math.min(100, f * 100).toFixed(1)}%;background:${barColor(f)}"></div></div></td>
-          <td class="muted">${pct(f)} of ${usd(GUILD_CAP)}${f >= 1 ? ' · <span class="bad">capped</span>' : ''}</td></tr>`;
-      }).join('')
-    : `<tr><td colspan="5" class="muted">No server messages today.</td></tr>`;
-
+  const meter = (label, frac, value, cap) => `<div class="card stat"><div class="eyebrow">${label}</div><div class="big">${value}<span class="muted"> / ${cap}</span></div><div class="meter"><div class="fill" style="width:${Math.min(100, frac * 100).toFixed(1)}%;background:${barColor(frac)}"></div></div><div class="muted">${pct(frac)} of daily cap${frac >= 0.8 ? ' · degrade' : ''}</div></div>`;
+  const stackRows = m.stack.map(([layer, metric, value, ok, target]) =>
+    `<tr><td class="mono">${layer}</td><td>${metric}</td><td class="${ok ? 'ok' : String(value).startsWith('—') ? 'muted' : 'bad'}"><b>${value}</b></td><td class="muted">${target}</td><td>${String(value).startsWith('—') ? '<span class="muted">·</span>' : ok ? '<span class="ok">✓</span>' : '<span class="bad">✗</span>'}</td></tr>`).join('');
+  const toolRows = m.topTools.map(([t, c]) => `<tr><td class="mono">${esc(t)}</td><td>${c}</td></tr>`).join('');
   const body = `
     <div class="grid3">
-      ${meter('Spend today (all)', spendFrac, usd(m.todaySpend), usd(SPEND_CAP))}
-      ${meter('Messages today (all)', msgFrac, String(m.todayMsgs), String(MSG_CAP))}
-      ${stat('Active testers today', `${m.activeTestersToday}<span class="muted"> / ${m.totalTesters}</span>`, 'invited on the allowlist')}
+      ${meter('Spend today', spendFrac, usd(m.todaySpend), usd(CAPS.spend))}
+      ${meter('Messages today', msgFrac, String(m.todayMsgs), String(CAPS.msgs))}
+      ${stat('Active testers today', `${m.activeTestersToday}<span class="muted"> / ${m.totalTesters}</span>`, 'on the allowlist')}
     </div>
-
-    <div class="card">
-      <div class="eyebrow">Pilot metric stack · testers only (founder excluded)</div>
-      <table><thead><tr><th>Layer</th><th>Metric</th><th>Now</th><th>Target</th><th></th></tr></thead><tbody>${stackRows}</tbody></table>
-    </div>
-
+    ${card('Pilot metric stack · testers only (founder excluded)', table(['Layer', 'Metric', 'Now', 'Target', ''], stackRows))}
     <div class="grid4">
       ${stat('Tester spend · today', usd(m.spend.tester))}
-      ${stat('Founder spend · today', usd(m.spend.founder), 'excluded from metrics')}
-      ${stat('Guest spend · today', usd(m.spend.guest), 'uninvited (should be $0)')}
-      ${stat('Surface · today', `${m.surface.srv}<span class="muted"> srv</span> · ${m.surface.dm}<span class="muted"> dm</span>`, 'messages by surface')}
+      ${stat('Founder spend · today', usd(m.spend.founder), 'excluded')}
+      ${stat('Guest spend · today', usd(m.spend.guest), 'should be $0')}
+      ${stat('Surface · today', `${m.surface.srv}<span class="muted"> srv</span> · ${m.surface.dm}<span class="muted"> dm</span>`)}
     </div>
-
     <div class="grid4">
       ${stat('Spend · 7d', usd(m.weekSpend))}
       ${stat('Messages · 7d', m.weekMsgs.toLocaleString())}
       ${stat('Cache hit rate', pct(m.cacheRate), 'served free')}
-      ${stat('Votes · 7d', `<span class="ok">▲ ${m.up}</span> · <span class="bad">▼ ${m.down}</span>`, 'on Pip answers')}
+      ${stat('Votes · 7d', `<span class="ok">▲ ${m.up}</span> · <span class="bad">▼ ${m.down}</span>`)}
     </div>
-
-    <div class="card">
-      <div class="eyebrow">Per-server spend · today (each server capped at ${usd(GUILD_CAP)}/day)</div>
-      <table><thead><tr><th>Server</th><th>Msgs</th><th>Spend</th><th></th><th>Of cap</th></tr></thead><tbody>${guildRows}</tbody></table>
-    </div>
-
-    <div class="card">
-      <div class="eyebrow">Spend · last 7 days</div>
-      <div class="chart">${m.days.map((d) => `<div class="col"><div class="bar" style="height:${Math.max(2, (d.spend / maxDay) * 120)}px" title="${usd(d.spend)}"></div><div class="tick">${d.day.slice(5)}</div></div>`).join('')}</div>
-    </div>
-
-    <div class="card">
-      <div class="eyebrow">Per-tester · today</div>
-      <table><thead><tr><th>User</th><th>Role</th><th>Msgs</th><th>Spend</th><th>Search</th><th>Scan</th><th>Chart</th></tr></thead><tbody>${userRows}</tbody></table>
-    </div>
-
-    <div class="grid2">
-      <div class="card"><div class="eyebrow">Top tools · 7d</div><table><thead><tr><th>Tool</th><th>Calls</th></tr></thead><tbody>${toolRows}</tbody></table></div>
-      <div class="card"><div class="eyebrow">Manual metrics · track by hand</div><table><thead><tr><th>Layer</th><th>Metric</th><th>How</th><th>Target</th></tr></thead><tbody>${manual}</tbody></table></div>
-    </div>`;
-
-  return page('Pip · Beta Dashboard', body, m.updated);
+    ${card('Spend · last 7 days', `<div class="chart">${m.days.map((d) => `<div class="col"><div class="bar" style="height:${Math.max(2, (d.spend / maxDay) * 120)}px" title="${usd(d.spend)}"></div><div class="tick">${d.day.slice(5)}</div></div>`).join('')}</div>`)}
+    ${card('Top tools · 7d', table(['Tool', 'Calls'], toolRows))}`;
+  return R.shell({ title: 'pip · admin — overview', active: 'overview', body, updated: m.updated, refresh: true });
 }
 
-function page(title, body, updated) {
-  return `<!doctype html><html lang="en"><head>
-<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta http-equiv="refresh" content="60">
-<title>${esc(title)}</title><style>
-:root{--mist:#F2F7EE;--paper:#FFF;--ink:#08160F;--body:#14342A;--sage:#5C6E63;--green:#12A15A;--clay:#C25B37;--hair:#D8E6D3}
-*{box-sizing:border-box}body{margin:0;background:var(--mist);color:var(--body);font:15px/1.5 -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;-webkit-font-smoothing:antialiased}
-.wrap{max-width:1080px;margin:0 auto;padding:28px 20px 60px}
-header{display:flex;align-items:baseline;justify-content:space-between;gap:12px;margin-bottom:22px}
-.brand{font-weight:600;font-size:22px;color:var(--ink);letter-spacing:-.02em}.dot{display:inline-block;width:10px;height:10px;border-radius:50%;background:var(--green);margin-left:2px}
-.muted{color:var(--sage)}.clay,.bad{color:var(--clay)}.ok{color:var(--green)}
-.eyebrow{font:12px/1 ui-monospace,SFMono-Regular,Menlo,monospace;text-transform:uppercase;letter-spacing:.08em;color:var(--sage);margin-bottom:12px}
-.card{background:var(--paper);border:1px solid var(--hair);border-radius:16px;padding:18px 20px;box-shadow:0 1px 2px rgba(14,59,38,.05),0 8px 24px rgba(14,59,38,.04);margin-bottom:14px}
-.grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}.grid4{display:grid;grid-template-columns:repeat(4,1fr);gap:14px}.grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
-.grid3 .card,.grid4 .card,.grid2 .card{margin-bottom:0}
-.stat .big,.big{font-size:28px;font-weight:600;color:var(--ink);letter-spacing:-.02em}
-.meter{height:8px;background:var(--hair);border-radius:99px;overflow:hidden;margin:12px 0 8px}.fill{height:100%;border-radius:99px}
-.chart{display:flex;align-items:flex-end;gap:12px;height:150px;padding-top:8px}.col{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:flex-end;gap:6px}
-.bar{width:100%;max-width:52px;background:var(--green);border-radius:6px 6px 0 0}.tick{font:11px ui-monospace,monospace;color:var(--sage)}
-table{width:100%;border-collapse:collapse}th{text-align:left;font:12px/1 ui-monospace,monospace;text-transform:uppercase;letter-spacing:.06em;color:var(--sage);padding:8px 10px;border-bottom:1px solid var(--hair)}
-td{padding:9px 10px;border-bottom:1px solid var(--hair);vertical-align:middle}tr:last-child td{border-bottom:none}
-.mono{font:13px ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--body)}
-.tag{font:11px ui-monospace,monospace;padding:2px 8px;border-radius:99px;border:1px solid var(--hair)}.tag.founder{color:#8a5a00;border-color:#e6d3a0;background:#fbf3dd}.tag.tester{color:var(--green);border-color:#bfe6cd;background:#eef8f1}.tag.guest{color:var(--sage)}
-@media(max-width:820px){.grid3,.grid4,.grid2{grid-template-columns:1fr 1fr}}@media(max-width:520px){.grid3,.grid4,.grid2{grid-template-columns:1fr}}
-</style></head><body><div class="wrap">
-<header><div class="brand">pip<span class="dot"></span> · beta dashboard</div><div class="muted">${updated ? `as of ${updated.toISOString().slice(11, 16)} UTC · refreshes 60s` : ''}</div></header>
-${body}</div></body></html>`;
+// ---- 2. Payments & revenue -------------------------------------------------
+async function viewPayments() {
+  const [pay, testers] = await Promise.all([D.loadPayments(), D.loadTesters()]);
+  const now = Date.now();
+  const paidTesters = testers.filter((t) => D.classify(t, now) === 'paid');
+  const churned = testers.filter((t) => t.subscription_provider && D.classify(t, now) === 'lapsed');
+  // MRR estimate from active paid subs (billing inferred from window length).
+  const mrr = paidTesters.reduce((s, t) => s + D.tierPrice(t.tier, D.inferBilling(t)), 0);
+  const rev = (days) => { const cut = now - days * D.DAY; return pay.payments.filter((p) => new Date(p.created_at).getTime() >= cut).reduce((s, p) => s + (Number(p.amount) || 0), 0); };
+  const provSplit = { dodo: paidTesters.filter((t) => t.subscription_provider === 'dodo').length, moonpay: paidTesters.filter((t) => t.subscription_provider === 'moonpay').length, loop: paidTesters.filter((t) => t.subscription_provider === 'loop').length };
+  const feed = pay.payments.slice(0, 40).map((p) =>
+    `<tr><td class="muted">${ago(p.created_at)}</td><td><span class="pill">${esc(p.provider)}</span></td><td>${usd(p.amount)} <span class="muted">${esc(p.currency)}</span></td><td class="mono">${esc(p.who || '—')}</td><td class="muted">${esc(p.status || '')}</td></tr>`).join('');
+  const subRows = paidTesters.map((t) =>
+    `<tr><td class="mono">${esc(t.name || t.platform_id)}</td><td><span class="pill">${esc(t.subscription_provider || '?')}</span></td><td>${esc((D.TIER[t.tier] || {}).label || t.tier || '—')}</td><td>${esc(D.inferBilling(t))}</td><td class="muted">${ymd(t.access_until)}</td></tr>`).join('');
+  const providersDown = (!pay.dodoOk || !pay.moonOk) ? `<p class="muted" style="margin:0 0 10px;font-size:12.5px">${pay.dodoOk ? '' : 'Dodo API unreachable. '}${pay.moonOk ? '' : 'MoonPay API unreachable.'} Showing what's available.</p>` : '';
+  const body = `
+    ${providersDown}
+    <div class="grid4">
+      ${stat('Active subscribers', String(paidTesters.length), 'status = active')}
+      ${stat('MRR (est.)', usd(mrr), 'active subs × plan price')}
+      ${stat('Revenue · 30d', usd(rev(30)), 'from provider payments')}
+      ${stat('Churned', String(churned.length), 'had a sub, now lapsed')}
+    </div>
+    <div class="grid3">
+      ${stat('Revenue · 7d', usd(rev(7)))}
+      ${stat('Revenue · all', usd(rev(3650)))}
+      ${stat('By provider', `${provSplit.moonpay} <span class="muted">moonpay</span> · ${provSplit.dodo} <span class="muted">dodo</span>${provSplit.loop ? ` · ${provSplit.loop} loop` : ''}`)}
+    </div>
+    ${card('Recent payments · live from Dodo + MoonPay', table(['When', 'Provider', 'Amount', 'Who', 'Status'], feed))}
+    ${card('Active subscriptions', table(['User', 'Provider', 'Plan', 'Billing', 'Renews'], subRows))}`;
+  return R.shell({ title: 'pip · admin — payments', active: 'payments', body, updated: new Date() });
+}
+
+// ---- 3. Trials & conversions ----------------------------------------------
+async function viewTrials() {
+  const testers = await D.loadTesters();
+  const now = Date.now();
+  const withState = testers.map((t) => ({ t, state: D.classify(t, now) }));
+  const trials = withState.filter((x) => x.state === 'trial');
+  const paid = withState.filter((x) => x.state === 'paid');
+  const lapsed = withState.filter((x) => x.state === 'lapsed');
+  const expiringSoon = trials.filter((x) => x.t.access_until && new Date(x.t.access_until).getTime() - now < 2 * D.DAY);
+  const lapsedUnpaid = lapsed.filter((x) => !x.t.subscription_provider);
+  const extended = testers.filter((t) => t.extension_used);
+  const convBase = paid.length + lapsedUnpaid.length;
+  const convRate = convBase ? paid.length / convBase : null;
+
+  const trialRows = trials.sort((a, b) => new Date(a.t.access_until || 0) - new Date(b.t.access_until || 0)).map((x) => {
+    const ends = x.t.access_until ? new Date(x.t.access_until).getTime() : null;
+    const left = ends ? Math.max(0, Math.round((ends - now) / D.DAY)) : '∞';
+    const soon = ends && ends - now < 2 * D.DAY;
+    return `<tr><td class="mono">${esc(x.t.name || x.t.platform_id)}</td><td><span class="pill">${esc(x.t.platform)}</span></td><td class="${soon ? 'bad' : ''}">${left}${left === '∞' ? '' : 'd'} left</td><td class="muted">${ymd(x.t.access_until)}</td><td>${x.t.extension_used ? '<span class="gold">extended</span>' : ''}</td></tr>`;
+  }).join('');
+  const lapsedRows = lapsedUnpaid.map((x) =>
+    `<tr><td class="mono">${esc(x.t.name || x.t.platform_id)}</td><td><span class="pill">${esc(x.t.platform)}</span></td><td class="muted">${ymd(x.t.access_until)}</td><td>${x.t.extension_used ? 'used ext' : 'no ext'}</td></tr>`).join('');
+  const extRows = extended.map((t) =>
+    `<tr><td class="mono">${esc(t.name || t.platform_id)}</td><td class="muted">${t.extension_claimed_at ? ago(t.extension_claimed_at) : '—'}</td><td>${t.extension_tweet_url ? `<a class="rowlink" href="${esc(t.extension_tweet_url)}" target="_blank" rel="noopener">tweet ↗</a>` : '<span class="muted">no link</span>'}</td></tr>`).join('');
+
+  const body = `
+    <div class="grid4">
+      ${stat('On trial now', String(trials.length))}
+      ${stat('Expiring ≤48h', String(expiringSoon.length), expiringSoon.length ? 'reach out' : '')}
+      ${stat('Lapsed (unpaid)', String(lapsedUnpaid.length))}
+      ${stat('Trial → paid', convRate == null ? '—' : pct(convRate), `${paid.length} paid / ${convBase} decided`)}
+    </div>
+    ${card('On trial now · soonest to expire first', table(['User', 'Platform', 'Left', 'Ends', ''], trialRows))}
+    ${card('Tweet extensions claimed · verify the links', table(['User', 'Claimed', 'Tweet'], extRows))}
+    ${card('Lapsed & unpaid · re-engage or let go', table(['User', 'Platform', 'Ended', 'Extension'], lapsedRows))}`;
+  return R.shell({ title: 'pip · admin — trials', active: 'trials', body, updated: new Date() });
+}
+
+// ---- 4. Activity feed ------------------------------------------------------
+async function viewActivity() {
+  const [rows, testers] = await Promise.all([D.loadActivity(100), D.loadTesters()]);
+  const nameOf = new Map(testers.filter((t) => t.name).map((t) => [t.platform_id, t.name]));
+  const feed = rows.map((r) => {
+    const isDM = String(r.guild_id).startsWith('dm:');
+    const who = nameOf.get(r.user_id) || shortId(r.user_id);
+    return `<tr><td class="muted" style="white-space:nowrap">${ago(r.created_at)}</td>
+      <td><a class="rowlink" href="/users?id=${encodeURIComponent(r.user_id)}">${esc(who)}</a></td>
+      <td><span class="pill">${isDM ? 'DM' : 'srv'}</span></td>
+      <td><div class="trunc" title="${esc(r.question)}">${esc(r.question || '—')}</div></td>
+      <td><div class="trunc muted" title="${esc(r.answer)}">${esc((r.answer || '').replace(/\s+/g, ' ').slice(0, 160))}</div></td></tr>`;
+  }).join('');
+  const body = card('Live activity · last 100 questions (auto-refresh 60s)', table(['When', 'User', '', 'Question', 'Answer'], feed));
+  return R.shell({ title: 'pip · admin — activity', active: 'activity', body, updated: new Date(), refresh: true });
+}
+
+// ---- 5. Users + drill-down -------------------------------------------------
+async function viewUsers(id, q) {
+  if (id) return viewUserDetail(id);
+  const [testers, rows] = await Promise.all([D.loadTesters(), D.loadUsage(7)]);
+  const now = Date.now();
+  const spendBy = new Map(); const lastBy = new Map(); const msgBy = new Map();
+  for (const r of rows) {
+    spendBy.set(r.user_id, (spendBy.get(r.user_id) || 0) + (Number(r.cost_usd) || 0));
+    msgBy.set(r.user_id, (msgBy.get(r.user_id) || 0) + 1);
+    if (!lastBy.has(r.user_id) || r.created_at > lastBy.get(r.user_id)) lastBy.set(r.user_id, r.created_at);
+  }
+  const needle = (q || '').toLowerCase();
+  const list = testers
+    .filter((t) => !needle || String(t.name || '').toLowerCase().includes(needle) || String(t.platform_id).toLowerCase().includes(needle))
+    .map((t) => ({ t, state: D.classify(t, now), last: lastBy.get(t.platform_id), spend: spendBy.get(t.platform_id) || 0, msgs: msgBy.get(t.platform_id) || 0 }))
+    .sort((a, b) => (b.last || '').localeCompare(a.last || ''));
+  const rowsHtml = list.map((x) =>
+    `<tr><td><a class="rowlink mono" href="/users?id=${encodeURIComponent(x.t.platform_id)}">${esc(x.t.name || x.t.platform_id)}</a></td>
+      <td><span class="pill">${esc(x.t.platform)}</span></td><td>${subTag(x.state)}</td>
+      <td>${x.msgs}</td><td>${usd4(x.spend)}</td><td class="muted">${x.last ? ago(x.last) : '—'}</td></tr>`).join('');
+  const body = `
+    <div class="card"><form method="GET" action="/users" style="display:flex;gap:10px"><input class="input" name="q" placeholder="Search by name or id" value="${esc(q || '')}"><button class="btn" type="submit">Search</button></form></div>
+    ${card(`Users · ${list.length}${needle ? ` matching “${esc(q)}”` : ''} (spend/msgs = last 7d)`, table(['User', 'Platform', 'State', 'Msgs 7d', 'Spend 7d', 'Last seen'], rowsHtml))}`;
+  return R.shell({ title: 'pip · admin — users', active: 'users', body, updated: new Date() });
+}
+
+async function viewUserDetail(id) {
+  const [testers, convos, profiles, rows] = await Promise.all([
+    D.loadTesters(), D.loadUserConversations(id, 30), D.loadUserProfile(id), D.loadUsage(30),
+  ]);
+  const t = testers.find((x) => x.platform_id === id);
+  const now = Date.now();
+  const mine = rows.filter((r) => r.user_id === id);
+  const spend = mine.reduce((s, r) => s + (Number(r.cost_usd) || 0), 0);
+  const state = t ? D.classify(t, now) : 'unknown';
+  const header = `<div class="card"><div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+      <div class="big">${esc(t ? t.name || t.platform_id : shortId(id))}</div>
+      ${t ? subTag(state) : ''}
+      <span class="mono muted">${esc(id)}</span>
+      <span class="spacer" style="flex:1"></span><a class="rowlink" href="/users">← all users</a></div></div>`;
+  const info = `<div class="grid4">
+      ${stat('State', t ? state : 'not a tester')}
+      ${stat('Spend · 30d', usd(spend))}
+      ${stat('Messages · 30d', String(mine.length))}
+      ${stat('Access until', t && ymd(t.access_until), t && t.subscription_provider ? `${t.subscription_provider} · ${(D.TIER[t.tier] || {}).label || t.tier || ''}` : '')}
+    </div>`;
+  const profileHtml = profiles.length
+    ? profiles.map((p) => `<div style="margin-bottom:10px"><div class="muted mono" style="font-size:12px">${esc(String(p.guild_id))} · ${ago(p.updated_at)}</div><div>${esc(p.profile)}</div></div>`).join('')
+    : '<p class="muted">No learned profile yet.</p>';
+  const convRows = convos.map((c) =>
+    `<tr><td class="muted" style="white-space:nowrap">${ago(c.created_at)}</td><td><div class="trunc" title="${esc(c.question)}">${esc(c.question)}</div></td><td><div class="trunc muted" title="${esc(c.answer)}">${esc((c.answer || '').replace(/\s+/g, ' ').slice(0, 160))}</div></td></tr>`).join('');
+  const body = `${header}${info}
+    ${card('Learned profile (memory)', profileHtml)}
+    ${card('Recent questions', table(['When', 'Question', 'Answer'], convRows))}`;
+  return R.shell({ title: 'pip · admin — user', active: 'users', body, updated: new Date() });
+}
+
+// ---- 6. Errors & health ----------------------------------------------------
+async function viewErrors() {
+  const rows = await D.loadUsage(7);
+  const failed = rows.filter((r) => r.failed);
+  const failRate = rows.length ? failed.length / rows.length : 0;
+  const degraded = rows.filter((r) => r.degraded).length;
+  const lat = rows.filter((r) => !r.cache_hit).map((r) => Number(r.latency_ms) || 0).filter((x) => x > 0);
+  const p95Lat = R.p95(lat);
+  // failure rate per day
+  const days = [];
+  for (let i = 6; i >= 0; i--) {
+    const d = new Date(Date.now() - i * D.DAY).toISOString().slice(0, 10);
+    const dayRows = rows.filter((r) => String(r.created_at).slice(0, 10) === d);
+    const f = dayRows.length ? dayRows.filter((r) => r.failed).length / dayRows.length : 0;
+    days.push({ day: d, f, n: dayRows.length });
+  }
+  const maxF = Math.max(0.01, ...days.map((d) => d.f));
+  // group recent errors by detail prefix
+  const byKind = new Map();
+  for (const r of failed) {
+    const k = (r.error_detail || 'unknown').split(' ')[0].slice(0, 60);
+    byKind.set(k, (byKind.get(k) || 0) + 1);
+  }
+  const kinds = [...byKind.entries()].sort((a, b) => b[1] - a[1]).slice(0, 10);
+  const recent = failed.slice(0, 40).map((r) =>
+    `<tr><td class="muted" style="white-space:nowrap">${ago(r.created_at)}</td><td><span class="pill">${esc(r.platform)}</span></td><td class="mono">${shortId(r.user_id)}</td><td><div class="trunc bad" title="${esc(r.error_detail || '')}">${esc(r.error_detail || 'unknown')}</div></td></tr>`).join('');
+  const kindRows = kinds.map(([k, c]) => `<tr><td class="mono">${esc(k)}</td><td>${c}</td></tr>`).join('');
+  const body = `
+    <div class="grid4">
+      ${stat('Failure rate · 7d', pct(failRate), `${failed.length} / ${rows.length}`)}
+      ${stat('p95 latency', p95Lat == null ? '—' : `${(p95Lat / 1000).toFixed(1)}s`, '<10s target')}
+      ${stat('Degraded turns', String(degraded), 'budget ≥80%')}
+      ${stat('Messages · 7d', rows.length.toLocaleString())}
+    </div>
+    ${card('Failure rate · last 7 days', `<div class="chart">${days.map((d) => `<div class="col"><div class="bar" style="height:${Math.max(2, (d.f / maxF) * 120)}px;background:${d.f > 0.1 ? 'var(--clay)' : 'var(--green)'}" title="${pct(d.f)} of ${d.n}"></div><div class="tick">${d.day.slice(5)}</div></div>`).join('')}</div>`)}
+    <div class="grid2">
+      ${card('Error kinds · 7d', table(['Kind', 'Count'], kindRows))}
+      ${card('Health', `<table><tbody>
+        <tr><td>Total failures</td><td class="${failed.length ? 'bad' : 'ok'}"><b>${failed.length}</b></td></tr>
+        <tr><td>Timeouts</td><td>${failed.filter((r) => (r.error_detail || '').includes('timeout')).length}</td></tr>
+        <tr><td>Rate-limits (429)</td><td>${failed.filter((r) => (r.error_detail || '').includes(':429')).length}</td></tr>
+        <tr><td>Overloaded (5xx)</td><td>${failed.filter((r) => /overloaded|:5\d\d/.test(r.error_detail || '')).length}</td></tr>
+      </tbody></table>`)}
+    </div>
+    ${card('Recent failures · error_detail', table(['When', 'Platform', 'User', 'Detail'], recent))}`;
+  return R.shell({ title: 'pip · admin — errors', active: 'errors', body, updated: new Date(), refresh: true });
 }
