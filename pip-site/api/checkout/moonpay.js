@@ -13,9 +13,9 @@ export const config = { runtime: 'edge' };
 // links you create in the MoonPay Commerce dashboard (one per plan+billing;
 // each should be a subscription pay link). Leave '' to keep that option off.
 const PAYLINKS = {
-  'personal-lite': { monthly: '', yearly: '' },
-  'personal-pro':  { monthly: '', yearly: '' },
-  'server-pro':    { monthly: '', yearly: '' },
+  'personal-lite': { monthly: '6a58aff5d0dad167e323adb7', yearly: '6a58aff62e504e36f03c3311' },
+  'personal-pro':  { monthly: '6a58aff7f02c0392e33c23f9', yearly: '6a58aff82a35ae41a9ec224b' },
+  'server-pro':    { monthly: '6a58aff926ebf2b46dfda976', yearly: '6a58aff917d45c0458040113' },
 };
 
 const HELIO_BASE = 'https://api.hel.io/v1';
@@ -39,9 +39,11 @@ export default async function handler(req) {
   const secret = process.env.MOONPAY_SECRET_KEY;
   if (!pub || !secret) return Response.json({ error: 'not configured' }, { status: 503 });
 
-  // Identity + plan ride along in `meta`, echoed back as transactionObject.meta.
-  // `ref` mirrors the Loop colon-packed format the webhook already understands;
-  // the discrete fields are there for readability / a belt-and-suspenders parse.
+  // Identity + plan ride along as a JSON string in
+  // prepareRequestBody.customerDetails.additionalJSON — the field the charge API
+  // echoes back in the webhook (our webhook parses it into meta). `ref` mirrors
+  // the Loop colon-packed format the webhook already understands; the discrete
+  // fields are there for readability / a belt-and-suspenders parse.
   const meta = {
     ref: `${platform}:${handle}:${slug}:${billing}`,
     platform, handle, plan: slug, billing,
@@ -49,13 +51,19 @@ export default async function handler(req) {
 
   let res;
   try {
-    res = await fetch(`${HELIO_BASE}/charge/create?publicKey=${encodeURIComponent(pub)}`, {
+    // Confirmed live: POST /charge/api-key with the paylink id as
+    // `paymentRequestId`; needs the Origin header + apiKey(public)+Bearer(secret).
+    res = await fetch(`${HELIO_BASE}/charge/api-key?apiKey=${encodeURIComponent(pub)}`, {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${secret}`,
         'Content-Type': 'application/json',
+        Origin: 'https://pipinvest.xyz',
       },
-      body: JSON.stringify({ paylinkId, meta }),
+      body: JSON.stringify({
+        paymentRequestId: paylinkId,
+        prepareRequestBody: { customerDetails: { additionalJSON: JSON.stringify(meta) } },
+      }),
     });
   } catch (e) {
     console.error(`[moonpay-checkout] network: ${e.message}`);
