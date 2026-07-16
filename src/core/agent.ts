@@ -597,13 +597,24 @@ export async function answer(msg: NormalizedMessage, opts: AnswerOptions = {}): 
     totals.cache_read_input_tokens += u.cache_read_input_tokens ?? 0;
     webSearches += resp.content.filter((b) => (b as { type: string }).type === 'server_tool_use').length;
 
-    // Always echo the assistant turn back into the transcript
-    messages.push({ role: 'assistant', content: resp.content });
+    // Echo the assistant turn back into the transcript. On every path except a
+    // paused server-tool turn, strip any web_search server_tool_use that came
+    // back WITHOUT its paired web_search_tool_result — re-sending that orphaned
+    // block is a hard 400 ("`web_search` tool use ... was found without a
+    // corresponding `web_search_tool_result` block"). It happens when the model
+    // fires web_search alongside client tools in one turn and the search result
+    // isn't in the returned content; without this, news-style asks ("why did X
+    // pump") failed every time. Pause turns are left intact so resume works.
+    const isPauseTurn = (resp.stop_reason as string) === 'pause_turn';
+    messages.push({
+      role: 'assistant',
+      content: isPauseTurn ? resp.content : stripDanglingWebSearch(resp.content),
+    });
 
     // Server-side tools (web_search) run inside the API. When their internal
     // loop hits its cap it returns `pause_turn` with the work-so-far already in
     // resp.content — re-send to let the API resume; do NOT treat it as final.
-    if ((resp.stop_reason as string) === 'pause_turn') {
+    if (isPauseTurn) {
       continue;
     }
 
@@ -746,6 +757,30 @@ function stripToolCallText(s: string): string {
     .replace(/<(?:antml:)?(function_calls|invoke|parameter)\b[^>]*>[\s\S]*?<\/(?:antml:)?\1>/g, '')
     .replace(/<\/?(?:antml:)?(?:function_calls|invoke|parameter)\b[^>]*>/g, '')
     .trim();
+}
+
+// A web_search server_tool_use MUST be followed by its web_search_tool_result in
+// the same assistant turn, or a later messages.create rejects the whole transcript
+// with a 400. When the model interleaves web_search with client tool calls in one
+// turn, the search result can be absent from the returned content — drop the
+// orphaned call so the turn stays valid. The client tools still ran, and the model
+// can re-issue the search on a later turn if it still needs it.
+function stripDanglingWebSearch(
+  content: Anthropic.Messages.ContentBlock[],
+): Anthropic.Messages.ContentBlock[] {
+  const resultIds = new Set(
+    content
+      .filter((b) => (b as { type?: string }).type === 'web_search_tool_result')
+      .map((b) => (b as { tool_use_id?: string }).tool_use_id)
+      .filter((id): id is string => typeof id === 'string'),
+  );
+  return content.filter((b) => {
+    const block = b as { type?: string; name?: string; id?: string };
+    if (block.type === 'server_tool_use' && block.name === 'web_search') {
+      return block.id != null && resultIds.has(block.id);
+    }
+    return true;
+  });
 }
 
 function dedupe(sources: SourceCitation[]): SourceCitation[] {
