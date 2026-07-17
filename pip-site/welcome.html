@@ -113,7 +113,8 @@
       return '<div class="step"><div class="step-num">' + n + '</div><div class="step-body">' + html + '</div></div>';
     }
     function btn(href, color, svg, label) {
-      return '<a class="plat-btn" href="' + href + '" target="_blank" rel="noopener" style="background:' + color + ';">' + svg + label + '</a>';
+      // Block wrapper so the button drops onto its own line below the step text.
+      return '<div><a class="plat-btn" href="' + href + '" target="_blank" rel="noopener" style="background:' + color + ';">' + svg + label + '</a></div>';
     }
 
     function discordPersonalCard() {
