@@ -627,6 +627,7 @@
     <div style="position: relative; width: 100%; max-width: 480px; height: min(770px, 92vh); background: #0f0f10; border: 1px solid var(--border); border-radius: 18px; overflow: hidden; box-shadow: 0 32px 80px -24px rgba(8,22,15,0.6); display: flex; flex-direction: column;">
       <div style="display: flex; align-items: center; justify-content: space-between; padding: 9px 12px; gap: 12px; flex-shrink: 0;">
         <a id="payframe-newtab" href="#" target="_blank" rel="noopener" class="mono" style="font-size: 11.5px; color: var(--muted); text-decoration: none;">Trouble connecting? Open in new tab ↗</a>
+        <a id="payframe-done" href="#" class="mono" style="font-size: 11.5px; color: var(--green-bright); font-weight: 600; text-decoration: none;">Paid? Start using Pip →</a>
         <button type="button" id="payframe-close" class="checkout-close">✕</button>
       </div>
       <iframe id="payframe" title="Crypto checkout" style="flex: 1; width: 100%; border: 0;" allow="clipboard-read; clipboard-write; payment; publickey-credentials-get *; accelerometer; gyroscope"></iframe>
@@ -730,8 +731,11 @@
       var sep = base.indexOf('?') === -1 ? '?' : '&';
       var h = encodeURIComponent(handle);
       if (provider === 'dodo') {
+        // After payment Dodo redirects here — the post-payment onboarding page.
+        var ret = encodeURIComponent('https://pipinvest.xyz/welcome?platform=' + platform + '&plan=' + slug);
         return base + sep + 'metadata_platform=' + platform + '&metadata_handle=' + h +
-          '&metadata_plan=' + encodeURIComponent(slug) + '&metadata_billing=' + billing;
+          '&metadata_plan=' + encodeURIComponent(slug) + '&metadata_billing=' + billing +
+          '&redirect_url=' + ret;
       }
       // Loop: carry everything in the reference id so it returns in the webhook.
       return base + sep + 'ref-id=' + encodeURIComponent(platform + ':' + handle + ':' + slug + ':' + billing);
@@ -889,6 +893,12 @@
       document.getElementById('payframe-overlay').classList.add('hidden');
       document.getElementById('payframe').src = 'about:blank';
     }
+    // Post-payment onboarding destination — carries the platform + plan the buyer
+    // picked so /welcome shows the right "how to start" steps.
+    function welcomeUrl() {
+      var slug = (state.checkoutPlan && state.checkoutPlan.slug) || '';
+      return '/welcome?platform=' + encodeURIComponent(state.platform) + '&plan=' + encodeURIComponent(slug);
+    }
 
     function normalizeHandle(raw, platform) {
       return raw.trim().replace(/^@+/, '');
@@ -979,6 +989,19 @@
     document.getElementById('payframe-close').addEventListener('click', closePayFrame);
     payframeOverlay.addEventListener('click', function (e) { if (e.target === payframeOverlay) closePayFrame(); });
     document.addEventListener('keydown', function (e) { if (e.key === 'Escape' && !payframeOverlay.classList.contains('hidden')) closePayFrame(); });
+    // Manual fallback: buyer clicks through to onboarding after crypto success.
+    document.getElementById('payframe-done').addEventListener('click', function (e) { e.preventDefault(); window.location.href = welcomeUrl(); });
+    // Primary: Helio (MoonPay Commerce) posts an event from its embed on payment
+    // completion. Its shape isn't contractually documented, so match loosely and
+    // only ever navigate to our own /welcome (the manual link above is the backstop).
+    window.addEventListener('message', function (e) {
+      if (payframeOverlay.classList.contains('hidden')) return;
+      if (!/hel\.io|moonpay/i.test(e.origin || '')) return;
+      var s = typeof e.data === 'string' ? e.data : JSON.stringify(e.data || '');
+      if (/success|completed|approved|\bpaid\b|PAYMENT_SUCCESS/i.test(s)) {
+        window.location.href = welcomeUrl();
+      }
+    });
 
     renderPricing();
   })();
