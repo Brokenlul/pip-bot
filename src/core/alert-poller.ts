@@ -91,11 +91,12 @@ async function pollOnce(): Promise<void> {
       for (const alert of rows) {
         if (crossed(alert, price)) {
           const sent = await pushMessage(alert.platform, alert.user_id, pushText(alert, price));
-          // On a failed send (adapter down, user blocked the bot) keep the
-          // alert active and just refresh last_price — retry on the next poll
-          // rather than silently losing the alert.
+          // On a failed send (adapter down, user blocked the bot) leave both
+          // active and last_price alone: last_price stays on the un-crossed side
+          // of the level, so the next poll still reads as a cross and retries.
+          // Refreshing it here would move it past the target and the alert could
+          // never fire again.
           if (sent) await markTriggered(alert.id);
-          else await updateLastPrice(alert.id, price);
         } else {
           await updateLastPrice(alert.id, price);
         }

@@ -60,7 +60,12 @@ export class DiscordAdapter implements PlatformAdapter {
     if (this.client) throw new Error('DiscordAdapter already started');
     this.handler = handler;
     // Founder spend-alert DMs (50/80/100% of daily budget) route through Discord.
-    setFounderNotifier((userId, text) => this.dmUser(userId, text));
+    // Best-effort: a missed spend alert is worth logging, not retrying.
+    setFounderNotifier((userId, text) =>
+      this.dmUser(userId, text).catch((e) => {
+        console.warn(`[discord] founder DM failed: ${(e as Error).message}`);
+      }),
+    );
     // Price-alert pushes (src/core/alert-poller.ts) route through the same DM path.
     registerPusher('discord', (userId, text) => this.dmUser(userId, text));
 
@@ -136,13 +141,15 @@ export class DiscordAdapter implements PlatformAdapter {
   }
 
   /** DM a user (founder spend alerts). Best-effort. */
+  /**
+   * DM a user. Throws if the send fails — callers decide what that means, so a
+   * dropped push can't look like a delivered one.
+   */
   private async dmUser(userId: string, text: string): Promise<void> {
-    try {
-      const user = await this.client?.users.fetch(userId);
-      await user?.send(text);
-    } catch (e) {
-      console.warn(`[discord] founder DM failed: ${(e as Error).message}`);
-    }
+    const client = this.client;
+    if (!client) throw new Error('Discord client not started');
+    const user = await client.users.fetch(userId);
+    await user.send(text);
   }
 
   /** Map a gate decision to the agent's per-request feature budget. */
