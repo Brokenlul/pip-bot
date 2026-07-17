@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>pip · You're in</title>
-<meta name="description" content="Payment confirmed — here's how to start using Pip on Discord or Telegram.">
+<meta name="description" content="Payment confirmed, here's how to start using Pip on Discord or Telegram.">
 <meta name="robots" content="noindex">
 <link rel="canonical" href="https://pipinvest.xyz/welcome">
 <meta name="theme-color" content="#F2F7EE">
@@ -74,7 +74,7 @@
 <div class="wrap">
   <span class="badge">✓ PAYMENT CONFIRMED</span>
   <h1>You're in. <em>Let's start Pip.</em></h1>
-  <p class="lede" id="lede">One quick step to activate your access — follow it and you're live.</p>
+  <p class="lede" id="lede">One quick step to activate your access, follow it and you're live.</p>
 
   <div id="steps"></div>
 
@@ -119,9 +119,9 @@
 
     function discordPersonalCard() {
       return '<div class="step-card"><div class="step-head">Start on Discord</div>' +
-        step(1, 'Join our Discord — Pip already lives there, and sharing a server is what lets you DM a bot.' + btn(LINKS.community, '#5865F2', DISCORD_SVG, 'Join our Discord')) +
+        step(1, 'Join our Discord, Pip already lives there, and sharing a server is what lets you DM a bot.' + btn(LINKS.community, '#5865F2', DISCORD_SVG, 'Join our Discord')) +
         step(2, 'Open <strong>Pip</strong>’s profile and hit <strong>Message</strong>.') +
-        step(3, 'Ask anything — no @mention needed in a DM. That first message activates your access.') +
+        step(3, 'Ask anything, no @mention needed in a DM. That first message activates your access.') +
         '</div>';
     }
     function discordServerCard() {
@@ -149,8 +149,8 @@
       html = isServer ? discordServerCard() : discordPersonalCard();
       document.getElementById('help-discord').href = LINKS.community;
     } else {
-      // Unknown platform (direct hit or missing params) — show both paths.
-      document.getElementById('lede').textContent = 'One quick step to activate — pick where you bought Pip for.';
+      // Unknown platform (direct hit or missing params), show both paths.
+      document.getElementById('lede').textContent = 'One quick step to activate, pick where you bought Pip for.';
       html = (isServer ? discordServerCard() : discordPersonalCard()) + telegramCard();
     }
     document.getElementById('steps').innerHTML = html;

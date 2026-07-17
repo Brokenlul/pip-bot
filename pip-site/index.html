@@ -39,7 +39,7 @@
   }
   * { box-sizing: border-box; }
   /* overflow-x: clip (not hidden) contains sideways overflow WITHOUT creating a
-     scroll container — `hidden` here silently breaks the sticky nav below. */
+     scroll container, `hidden` here silently breaks the sticky nav below. */
   html, body { margin: 0; padding: 0; background: var(--cream); overflow-x: clip; }
   body { font-family: 'Geist', system-ui, sans-serif; color: var(--ink); -webkit-font-smoothing: antialiased; }
   ::selection { background: var(--green); color: var(--cream); }
@@ -135,7 +135,7 @@
   /* The memory-steps "timeline" (shared connector line + dots aligned to a
      shared top edge) only makes sense in the 3-column row this grid renders
      as at >=940px (auto-fit's own collapse point given the 260px column
-     min + 48px gap, not a round number). Below that — 2-col AND 1-col — the
+     min + 48px gap, not a round number). Below that, 2-col AND 1-col, the
      dots become inline markers instead of floating disconnected in a gap. */
   @media (max-width: 939px) {
     .step-line { display: none; }
@@ -172,12 +172,12 @@
   }
 
   /* Single-line terminal treatment. On phones the sentence doesn't fit, and
-     truncating hides both the question and the blinking caret — so wrap there. */
+     truncating hides both the question and the blinking caret, so wrap there. */
   .hero-typed { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
   .hero-prompt { align-items: center; }
   @media (max-width: 640px) {
     .hero-typed { white-space: normal; overflow: visible; text-overflow: clip; }
-    /* wrapped text turns the card multi-line — keep the status dot on line one */
+    /* wrapped text turns the card multi-line, keep the status dot on line one */
     .hero-prompt { align-items: flex-start; }
     .hero-prompt .hero-dot { margin-top: 6px; }
   }
@@ -228,7 +228,7 @@
     <div style="position: absolute; left: 0; right: 0; bottom: 0; height: 180px; background: linear-gradient(to bottom, rgba(242,247,238,0) 0%, var(--cream) 100%); z-index: 1; pointer-events: none;"></div>
     <!-- min-width:0 is load-bearing: as a flex item this defaults to min-width:auto,
          so the nowrap typed line below sets a min-content floor (~590px) that the
-         whole hero inherits — headline and card then overflow every phone width. -->
+         whole hero inherits, headline and card then overflow every phone width. -->
     <div style="position: relative; z-index: 2; width: 100%; min-width: 0; max-width: 880px; display: flex; flex-direction: column; align-items: center; text-align: center; gap: 0;">
       <div class="mono hero-anim-1" style="font-size: 13px; letter-spacing: 0.14em; color: var(--green);">⟩ AI MARKET ANALYST</div>
       <h1 class="hero-anim-2" style="margin: 28px 0 0; font-size: clamp(52px, 8.5vw, 96px); line-height: 1.02; letter-spacing: -0.035em; font-weight: 600; text-wrap: balance;">Your AI Market <em style="font-style: italic; color: var(--green); font-weight: 500;">Analyst</em>.</h1>
@@ -551,7 +551,7 @@
 
     <div style="max-width: 1080px; margin: 40px auto 0;">
       <div id="pricing-cards" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(min(280px, 100%), 1fr)); gap: 20px; align-items: stretch;"></div>
-      <p style="margin: 32px 0 0; text-align: center; font-size: 14px; color: var(--muted);">Paid plans include a 7-day free trial — no commitment, cancel anytime.</p>
+      <p style="margin: 32px 0 0; text-align: center; font-size: 14px; color: var(--muted);">Paid plans include a 7-day free trial, no commitment, cancel anytime.</p>
     </div>
   </section>
 
@@ -586,7 +586,7 @@
         <button type="button" id="checkout-card" class="checkout-submit">Pay with card →</button>
         <button type="button" id="checkout-usdc" class="checkout-alt">Pay with crypto (USDC & more) →</button>
       </div>
-      <p style="margin: 0; text-align: center; font-size: 12px; color: var(--muted); line-height: 1.5;">Access unlocks on your <span id="co-plat-word">Discord</span> account automatically after payment. 7-day free trial — cancel anytime.</p>
+      <p style="margin: 0; text-align: center; font-size: 12px; color: var(--muted); line-height: 1.5;">Access unlocks on your <span id="co-plat-word">Discord</span> account automatically after payment. 7-day free trial, cancel anytime.</p>
     </div>
   </div>
 
@@ -731,7 +731,7 @@
       var sep = base.indexOf('?') === -1 ? '?' : '&';
       var h = encodeURIComponent(handle);
       if (provider === 'dodo') {
-        // After payment Dodo redirects here — the post-payment onboarding page.
+        // After payment Dodo redirects here, the post-payment onboarding page.
         var ret = encodeURIComponent('https://pipinvest.xyz/welcome?platform=' + platform + '&plan=' + slug);
         return base + sep + 'metadata_platform=' + platform + '&metadata_handle=' + h +
           '&metadata_plan=' + encodeURIComponent(slug) + '&metadata_billing=' + billing +
@@ -755,7 +755,7 @@
       { name: 'PRO', slug: 'server-pro', monthly: 29, yearly: 24, popular: true, tagline: 'The research desk for active communities.', cta: 'Get the research desk',
         features: ['No daily ceiling to worry about', 'Live funding & OI reads', "Per-server memory that learns your community's watchlists", 'Auto-reads tickers & contracts dropped in chat'] },
       { name: 'ELITE', custom: true, tagline: 'For large & alpha communities.', cta: 'Talk to us',
-        features: ['Full white-label — your brand, bot name & avatar', 'Everything in Pro', 'Built for high-volume servers', 'Scheduled briefings & event alerts (CPI, FOMC)', "Custom persona in your community's voice", 'Priority support & early features'] }
+        features: ['Full white-label: your brand, bot name & avatar', 'Everything in Pro', 'Built for high-volume servers', 'Scheduled briefings & event alerts (CPI, FOMC)', "Custom persona in your community's voice", 'Priority support & early features'] }
     ];
 
     function esc(s) {
@@ -776,7 +776,7 @@
         name: p.name, slug: p.slug, tagline: p.tagline, features: p.features, cta: p.cta,
         popular: !!p.popular, isFree: !!p.isFree, ctaKind: ctaKind, href: href, billing: billing,
         priceMain: main, priceSuffix: suffix, priceNote: note, hasNote: !!note,
-        billingLine: isCustom ? 'Custom pricing — let’s scope it together' : (isYearly ? note : 'billed monthly, cancel anytime')
+        billingLine: isCustom ? 'Custom pricing, let’s scope it together' : (isYearly ? note : 'billed monthly, cancel anytime')
       };
     }
 
@@ -795,7 +795,7 @@
       var ctaClass = plan.popular ? 'pricing-cta filled' : 'pricing-cta outline';
       var nameColor = plan.popular ? 'var(--green)' : 'var(--ink)';
       var footer = plan.ctaKind === 'free' ? 'Free for 7 days · no card'
-        : plan.ctaKind === 'contact' ? "Custom terms — let's talk"
+        : plan.ctaKind === 'contact' ? "Custom terms, let's talk"
         : 'No commitment · cancel anytime';
       var ctaAttr = plan.ctaKind === 'checkout'
         ? (' href="#" data-plan-idx="' + idx + '"')
@@ -874,7 +874,7 @@
         : 'Join our Discord, then open Pip and hit Message to DM it.';
       document.getElementById('trial-telegram-note').textContent = isServer
         ? 'Add @pipinvestbot to your group.'
-        : 'Message @pipinvestbot — that’s the whole signup.';
+        : 'Message @pipinvestbot, that’s the whole signup.';
       document.getElementById('trial-title').textContent = isServer ? 'Add Pip to your community' : 'Where do you want Pip?';
       document.getElementById('trial-overlay').classList.remove('hidden');
     }
@@ -893,7 +893,7 @@
       document.getElementById('payframe-overlay').classList.add('hidden');
       document.getElementById('payframe').src = 'about:blank';
     }
-    // Post-payment onboarding destination — carries the platform + plan the buyer
+    // Post-payment onboarding destination, carries the platform + plan the buyer
     // picked so /welcome shows the right "how to start" steps.
     function welcomeUrl() {
       var slug = (state.checkoutPlan && state.checkoutPlan.slug) || '';
@@ -914,8 +914,8 @@
       var url = checkoutUrl(provider, plan.slug, plan.billing, state.platform, handle);
       if (!url) {
         showError(provider === 'dodo'
-          ? 'Card checkout isn’t live yet — try crypto, or check back shortly.'
-          : 'Crypto checkout isn’t live yet — try card, or check back shortly.');
+          ? 'Card checkout isn’t live yet, try crypto, or check back shortly.'
+          : 'Crypto checkout isn’t live yet, try card, or check back shortly.');
         return;
       }
       window.location.href = url;
@@ -945,10 +945,10 @@
         var data = await resp.json().catch(function () { return {}; });
         if (resp.ok && data.url) { openPayFrame(data.url); return; }
         showError(resp.status === 503
-          ? 'Crypto checkout isn’t live yet — try card, or check back shortly.'
-          : 'Couldn’t start crypto checkout — try again, or use card.');
+          ? 'Crypto checkout isn’t live yet, try card, or check back shortly.'
+          : 'Couldn’t start crypto checkout, try again, or use card.');
       } catch (e) {
-        showError('Couldn’t reach checkout — check your connection and try again.');
+        showError('Couldn’t reach checkout, check your connection and try again.');
       } finally {
         btn.disabled = false; btn.textContent = prev;
       }
