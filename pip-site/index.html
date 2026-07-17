@@ -38,7 +38,9 @@
     --clay: #C25B37;
   }
   * { box-sizing: border-box; }
-  html, body { margin: 0; padding: 0; background: var(--cream); overflow-x: hidden; }
+  /* overflow-x: clip (not hidden) contains sideways overflow WITHOUT creating a
+     scroll container — `hidden` here silently breaks the sticky nav below. */
+  html, body { margin: 0; padding: 0; background: var(--cream); overflow-x: clip; }
   body { font-family: 'Geist', system-ui, sans-serif; color: var(--ink); -webkit-font-smoothing: antialiased; }
   ::selection { background: var(--green); color: var(--cream); }
   a { -webkit-tap-highlight-color: transparent; }
@@ -203,7 +205,7 @@
       </div>
       <div style="width: 1px; height: 20px; background: var(--border);"></div>
       <div style="display: flex; align-items: center; gap: 6px;">
-        <a href="https://discord.gg/b6uzDj4Pqc" title="Discord" target="_blank" rel="noopener" class="social-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M19.27 5.33A18.27 18.27 0 0 0 14.5 3.8a.07.07 0 0 0-.08.04c-.2.36-.43.83-.59 1.2a16.9 16.9 0 0 0-5.66 0 12 12 0 0 0-.6-1.2.08.08 0 0 0-.08-.04A18.2 18.2 0 0 0 2.72 5.33a.07.07 0 0 0-.03.03C.35 8.9-.21 12.36.07 15.79a.08.08 0 0 0 .03.05 18.4 18.4 0 0 0 5.53 2.8.08.08 0 0 0 .08-.03c.43-.58.8-1.2 1.13-1.84a.07.07 0 0 0-.04-.1 12.1 12.1 0 0 1-1.73-.83.08.08 0 0 1-.01-.13c.12-.09.23-.18.34-.27a.07.07 0 0 1 .08-.01c3.63 1.66 7.56 1.66 11.15 0a.07.07 0 0 1 .08.01c.11.09.22.18.34.27a.08.08 0 0 1-.01.13c-.55.32-1.13.6-1.73.83a.08.08 0 0 0-.04.1c.34.64.71 1.26 1.13 1.84a.07.07 0 0 0 .08.03 18.3 18.3 0 0 0 5.54-2.8.08.08 0 0 0 .03-.05c.33-3.97-.55-7.4-2.32-10.43a.06.06 0 0 0-.03-.03ZM8.02 13.74c-1.09 0-1.99-1-1.99-2.23 0-1.22.88-2.23 1.99-2.23 1.12 0 2.01 1.02 1.99 2.23 0 1.23-.87 2.23-1.99 2.23Zm7.15 0c-1.09 0-1.99-1-1.99-2.23 0-1.22.88-2.23 1.99-2.23 1.12 0 2 1.02 1.99 2.23 0 1.23-.87 2.23-1.99 2.23Z" fill="currentColor"/></svg></a>
+        <a href="https://discord.gg/zUvpPaYdAu" title="Discord" target="_blank" rel="noopener" class="social-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M19.27 5.33A18.27 18.27 0 0 0 14.5 3.8a.07.07 0 0 0-.08.04c-.2.36-.43.83-.59 1.2a16.9 16.9 0 0 0-5.66 0 12 12 0 0 0-.6-1.2.08.08 0 0 0-.08-.04A18.2 18.2 0 0 0 2.72 5.33a.07.07 0 0 0-.03.03C.35 8.9-.21 12.36.07 15.79a.08.08 0 0 0 .03.05 18.4 18.4 0 0 0 5.53 2.8.08.08 0 0 0 .08-.03c.43-.58.8-1.2 1.13-1.84a.07.07 0 0 0-.04-.1 12.1 12.1 0 0 1-1.73-.83.08.08 0 0 1-.01-.13c.12-.09.23-.18.34-.27a.07.07 0 0 1 .08-.01c3.63 1.66 7.56 1.66 11.15 0a.07.07 0 0 1 .08.01c.11.09.22.18.34.27a.08.08 0 0 1-.01.13c-.55.32-1.13.6-1.73.83a.08.08 0 0 0-.04.1c.34.64.71 1.26 1.13 1.84a.07.07 0 0 0 .08.03 18.3 18.3 0 0 0 5.54-2.8.08.08 0 0 0 .03-.05c.33-3.97-.55-7.4-2.32-10.43a.06.06 0 0 0-.03-.03ZM8.02 13.74c-1.09 0-1.99-1-1.99-2.23 0-1.22.88-2.23 1.99-2.23 1.12 0 2.01 1.02 1.99 2.23 0 1.23-.87 2.23-1.99 2.23Zm7.15 0c-1.09 0-1.99-1-1.99-2.23 0-1.22.88-2.23 1.99-2.23 1.12 0 2 1.02 1.99 2.23 0 1.23-.87 2.23-1.99 2.23Z" fill="currentColor"/></svg></a>
         <a href="https://t.me/pipinvestbot" title="Telegram" target="_blank" rel="noopener" class="social-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M21.05 3.35 2.7 10.42c-1.25.5-1.24 1.18-.23 1.49l4.7 1.47 1.8 5.53c.22.6.37.84.75.84.3 0 .43-.13.6-.3l1.65-1.6 3.42 2.53c.63.35 1.08.17 1.24-.58l2.24-10.55c.24-1.02-.4-1.48-1.02-1.9Zm-12.86 8.9-1.9-.6L18.4 6.1c.32-.19.62-.09.37.12L8.19 12.25Zm.6 4.16-.72-2.31 8.63-5.4c.28-.17.53-.08.32.11l-6.84 6.14-.55 1.83-.84 0Z" fill="currentColor"/></svg></a>
         <a href="https://x.com/pipinvestbot" title="X" target="_blank" rel="noopener" class="social-icon"><svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M14.28 10.16 22.98 0h-2.06l-7.55 8.82L7.34 0H.5l9.13 13.34L.5 24h2.06l7.98-9.32L17.16 24h6.84l-9.72-13.84Zm-2.82 3.3-.92-1.32L3.56 1.56h3.17l5.94 8.5.92 1.31 7.72 11.05h-3.17l-6.3-9Z" fill="currentColor"/></svg></a>
       </div>
@@ -588,6 +590,38 @@
     </div>
   </div>
 
+  <!-- ============ FREE-TRIAL PLATFORM CHOOSER ============ -->
+  <div id="trial-overlay" class="checkout-overlay hidden">
+    <div class="checkout-modal">
+      <div style="display: flex; align-items: flex-start; justify-content: space-between; gap: 16px;">
+        <div style="display: flex; flex-direction: column; gap: 4px;">
+          <div class="mono" style="font-size: 12px; letter-spacing: 0.14em; color: var(--green);">START FREE</div>
+          <div id="trial-title" style="font-size: 18px; font-weight: 600; letter-spacing: -0.01em;">Where do you want Pip?</div>
+        </div>
+        <button type="button" id="trial-close" class="checkout-close">✕</button>
+      </div>
+      <p style="margin: 0; font-size: 13px; color: var(--muted); line-height: 1.5;">Free for 7 days · no card needed. Pick your platform and we'll take you there.</p>
+      <div style="display: flex; flex-direction: column; gap: 14px;">
+        <a id="trial-discord" href="#" target="_blank" rel="noopener" class="checkout-alt" style="justify-content: flex-start; gap: 14px; padding: 14px 16px; height: auto;">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" style="flex: none; color: #5865F2;"><path d="M19.27 5.33A18.27 18.27 0 0 0 14.5 3.8a.07.07 0 0 0-.08.04c-.2.36-.43.83-.59 1.2a16.9 16.9 0 0 0-5.66 0 12 12 0 0 0-.6-1.2.08.08 0 0 0-.08-.04A18.2 18.2 0 0 0 2.72 5.33a.07.07 0 0 0-.03.03C.35 8.9-.21 12.36.07 15.79a.08.08 0 0 0 .03.05 18.4 18.4 0 0 0 5.53 2.8.08.08 0 0 0 .08-.03c.43-.58.8-1.2 1.13-1.84a.07.07 0 0 0-.04-.1 12.1 12.1 0 0 1-1.73-.83.08.08 0 0 1-.01-.13c.12-.09.23-.18.34-.27a.07.07 0 0 1 .08-.01c3.63 1.66 7.56 1.66 11.15 0a.07.07 0 0 1 .08.01c.11.09.22.18.34.27a.08.08 0 0 1-.01.13c-.55.32-1.13.6-1.73.83a.08.08 0 0 0-.04.1c.34.64.71 1.26 1.13 1.84a.07.07 0 0 0 .08.03 18.3 18.3 0 0 0 5.54-2.8.08.08 0 0 0 .03-.05c.33-3.97-.55-7.4-2.32-10.43a.06.06 0 0 0-.03-.03ZM8.02 13.74c-1.09 0-1.99-1-1.99-2.23 0-1.22.88-2.23 1.99-2.23 1.12 0 2.01 1.02 1.99 2.23 0 1.23-.87 2.23-1.99 2.23Zm7.15 0c-1.09 0-1.99-1-1.99-2.23 0-1.22.88-2.23 1.99-2.23 1.12 0 2 1.02 1.99 2.23 0 1.23-.87 2.23-1.99 2.23Z" fill="currentColor"/></svg>
+          <span style="display: flex; flex-direction: column; gap: 2px; text-align: left;">
+            <span style="font-weight: 600; color: var(--ink);">Discord</span>
+            <span id="trial-discord-note" style="font-size: 12px; color: var(--muted); line-height: 1.4;"></span>
+          </span>
+          <span style="margin-left: auto; color: var(--muted);">→</span>
+        </a>
+        <a id="trial-telegram" href="#" target="_blank" rel="noopener" class="checkout-alt" style="justify-content: flex-start; gap: 14px; padding: 14px 16px; height: auto;">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" style="flex: none; color: #229ED9;"><path d="M21.05 3.35 2.7 10.42c-1.25.5-1.24 1.18-.23 1.49l4.7 1.47 1.8 5.53c.22.6.37.84.75.84.3 0 .43-.13.6-.3l1.65-1.6 3.42 2.53c.63.35 1.08.17 1.24-.58l2.24-10.55c.24-1.02-.4-1.48-1.02-1.9Zm-12.86 8.9-1.9-.6L18.4 6.1c.32-.19.62-.09.37.12L8.19 12.25Zm.6 4.16-.72-2.31 8.63-5.4c.28-.17.53-.08.32.11l-6.84 6.14-.55 1.83-.84 0Z" fill="currentColor"/></svg>
+          <span style="display: flex; flex-direction: column; gap: 2px; text-align: left;">
+            <span style="font-weight: 600; color: var(--ink);">Telegram</span>
+            <span id="trial-telegram-note" style="font-size: 12px; color: var(--muted); line-height: 1.4;"></span>
+          </span>
+          <span style="margin-left: auto; color: var(--muted);">→</span>
+        </a>
+      </div>
+    </div>
+  </div>
+
   <!-- ====== IN-SITE CRYPTO CHECKOUT (MoonPay, embedded via iframe) ====== -->
   <div id="payframe-overlay" class="checkout-overlay hidden" style="padding: 16px;">
     <div style="position: relative; width: 100%; max-width: 480px; height: min(770px, 92vh); background: #0f0f10; border: 1px solid var(--border); border-radius: 18px; overflow: hidden; box-shadow: 0 32px 80px -24px rgba(8,22,15,0.6); display: flex; flex-direction: column;">
@@ -617,7 +651,7 @@
         <a href="/privacy" class="footer-link">Privacy</a>
         <a href="/terms" class="footer-link">Terms</a>
         <a href="https://x.com/pipinvestbot" target="_blank" rel="noopener" class="footer-link">X</a>
-        <a href="https://discord.gg/b6uzDj4Pqc" target="_blank" rel="noopener" class="footer-link">Discord</a>
+        <a href="https://discord.gg/zUvpPaYdAu" target="_blank" rel="noopener" class="footer-link">Discord</a>
         <a href="https://t.me/pipinvestbot" target="_blank" rel="noopener" class="footer-link">Telegram</a>
       </div>
       <span>pipinvest.xyz</span>
@@ -650,7 +684,7 @@
     var LINKS = {
       discordInvite: 'https://discord.com/oauth2/authorize?client_id=1521437096294744216&scope=bot&permissions=274878024768',
       telegram: 'https://t.me/pipinvestbot',
-      community: 'https://discord.gg/b6uzDj4Pqc'
+      community: 'https://discord.gg/zUvpPaYdAu'
     };
 
     // ============================================================
@@ -760,6 +794,8 @@
         : 'No commitment · cancel anytime';
       var ctaAttr = plan.ctaKind === 'checkout'
         ? (' href="#" data-plan-idx="' + idx + '"')
+        : plan.ctaKind === 'free'
+        ? (' href="#" data-trial="1"')
         : (' href="' + esc(plan.href) + '"' + (plan.href.indexOf('http') === 0 ? ' target="_blank" rel="noopener"' : ''));
       return (
         '<div class="' + cls + '">' + badge +
@@ -817,6 +853,28 @@
     }
     function closeCheckout() {
       document.getElementById('checkout-overlay').classList.add('hidden');
+    }
+
+    // Free-trial platform chooser. Discord/Telegram routes differ by audience:
+    // personal = join the community server (then DM Pip) / message @pipinvestbot;
+    // server = add the bot to your own server / group.
+    function openTrial(audience) {
+      var isServer = audience === 'server';
+      var d = document.getElementById('trial-discord');
+      var t = document.getElementById('trial-telegram');
+      d.href = isServer ? LINKS.discordInvite : LINKS.community;
+      t.href = LINKS.telegram;
+      document.getElementById('trial-discord-note').textContent = isServer
+        ? 'Add Pip to a server you manage.'
+        : 'Join our Discord, then open Pip and hit Message to DM it.';
+      document.getElementById('trial-telegram-note').textContent = isServer
+        ? 'Add @pipinvestbot to your group.'
+        : 'Message @pipinvestbot — that’s the whole signup.';
+      document.getElementById('trial-title').textContent = isServer ? 'Add Pip to your community' : 'Where do you want Pip?';
+      document.getElementById('trial-overlay').classList.remove('hidden');
+    }
+    function closeTrial() {
+      document.getElementById('trial-overlay').classList.add('hidden');
     }
     // Crypto checkout opens IN-SITE via an iframe (MoonPay's page allows framing)
     // rather than a full redirect, so the buyer never leaves pipinvest.xyz.
@@ -891,11 +949,21 @@
     document.getElementById('seg-yearly').addEventListener('click', function () { state.billing = 'yearly'; renderPricing(); });
 
     document.getElementById('pricing-cards').addEventListener('click', function (e) {
+      var trial = e.target.closest('[data-trial]');
+      if (trial) { e.preventDefault(); openTrial(state.audience); return; }
       var btn = e.target.closest('[data-plan-idx]');
       if (!btn) return;
       e.preventDefault();
       openCheckout(state.currentPlans[parseInt(btn.getAttribute('data-plan-idx'), 10)]);
     });
+
+    var trialOverlay = document.getElementById('trial-overlay');
+    document.getElementById('trial-close').addEventListener('click', closeTrial);
+    trialOverlay.addEventListener('click', function (e) { if (e.target === trialOverlay) closeTrial(); });
+    // Clicking a platform opens it in a new tab; close the chooser behind it.
+    document.getElementById('trial-discord').addEventListener('click', function () { setTimeout(closeTrial, 60); });
+    document.getElementById('trial-telegram').addEventListener('click', function () { setTimeout(closeTrial, 60); });
+    document.addEventListener('keydown', function (e) { if (e.key === 'Escape' && !trialOverlay.classList.contains('hidden')) closeTrial(); });
 
     var overlay = document.getElementById('checkout-overlay');
     overlay.addEventListener('click', function (e) { if (e.target === overlay) closeCheckout(); });
