@@ -85,7 +85,7 @@ function band(bids: Level[], asks: Level[], mid: number, bandPct: number): Band 
 }
 
 function walls(levels: Level[], mid: number, n = 4): Wall[] {
-  // Consider resting size within ~5% of mid, biggest first — the levels a trader
+  // Consider resting size within ~5% of mid, biggest first: the levels a trader
   // would actually watch, not far-away dust.
   const near = levels.filter((l) => Math.abs(l.px - mid) / mid <= 0.05);
   return [...near]
@@ -173,7 +173,7 @@ async function fetchBinance(sym: string): Promise<Output | null> {
 
 async function fetchHyperliquid(sym: string): Promise<Output> {
   const name = await resolveCoinName(sym);
-  if (!name) throw new Error(`"${sym}" not found on Binance futures or Hyperliquid — check the ticker.`);
+  if (!name) throw new Error(`"${sym}" not found on Binance futures or Hyperliquid. Check the ticker.`);
   const book = await hlInfo<{ levels: [Array<{ px: string; sz: string }>, Array<{ px: string; sz: string }>] }>({ type: 'l2Book', coin: name });
   const bids: Level[] = book.levels[0].map((l) => ({ px: Number(l.px), sz: Number(l.sz) }));
   const asks: Level[] = book.levels[1].map((l) => ({ px: Number(l.px), sz: Number(l.sz) }));
@@ -185,7 +185,7 @@ async function fetchHyperliquid(sym: string): Promise<Output> {
 export const orderFlowTool: Tool<Input, Output> = {
   name: 'order_flow',
   description:
-    'Snapshot of ORDER FLOW for a market: order-book imbalance (resting bid vs ask size near price), the biggest liquidity walls each side, and — for majors — CVD / net delta, aggressor buy-vs-sell split, and the largest recent prints off the tape. Use ONLY when a trader explicitly asks about order flow, the order book / DOM / depth, bids vs asks, walls, CVD / delta, aggression, or "who is hitting the tape". Do NOT use it for plain price, trend, funding, or chart questions. Majors read from Binance USDT-M futures (book + flow); other coins (HIP-3 tokenized equities, HL-only perps) return a book-only read from Hyperliquid. This is a point-in-time snapshot, not a live stream, and resting size can be spoofed.',
+    'Snapshot of ORDER FLOW for a market: order-book imbalance (resting bid vs ask size near price), the biggest liquidity walls each side, and (for majors) CVD / net delta, aggressor buy-vs-sell split, and the largest recent prints off the tape. Use ONLY when a trader explicitly asks about order flow, the order book / DOM / depth, bids vs asks, walls, CVD / delta, aggression, or "who is hitting the tape". Do NOT use it for plain price, trend, funding, or chart questions. Majors read from Binance USDT-M futures (book + flow); other coins (HIP-3 tokenized equities, HL-only perps) return a book-only read from Hyperliquid. This is a point-in-time snapshot, not a live stream, and resting size can be spoofed.',
   inputSchema: {
     type: 'object',
     properties: {
