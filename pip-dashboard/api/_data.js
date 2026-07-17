@@ -71,7 +71,9 @@ function first(...v) { for (const x of v) if (x != null && x !== '') return x; r
 async function fetchDodo() {
   const key = process.env.DODO_API_KEY;
   if (!key) return { ok: false, payments: [], subs: [] };
-  const base = 'https://test.dodopayments.com';
+  // Live by default; set DODO_API_BASE=https://test.dodopayments.com to read test
+  // mode. The key must match the mode — a test key 401s against the live host.
+  const base = process.env.DODO_API_BASE || 'https://live.dodopayments.com';
   const h = { Authorization: `Bearer ${key}` };
   try {
     const [pRes, sRes] = await Promise.all([
