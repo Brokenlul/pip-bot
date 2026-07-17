@@ -1,6 +1,6 @@
 import { rasterizeSvg } from './candle-chart.js';
 import { fmtUtcHm } from './util.js';
-import type { OrderFlowChartData } from '../data/order-flow.js';
+import type { OrderFlowChartData, OiCvdChartData } from '../data/order-flow.js';
 
 /**
  * Pip-branded order-flow chart: a market-depth view (cumulative bid vs ask
@@ -186,5 +186,82 @@ export function renderOrderFlowChartPng(d: OrderFlowChartData): Buffer {
   el.push(`<text x="${x1}" y="${fy}" font-size="12" fill="${FAINT}" text-anchor="end">pipinvest.xyz</text>`);
 
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" font-family="JetBrains Mono">${el.join('')}</svg>`;
+  return rasterizeSvg(svg);
+}
+
+// ---- Open Interest + CVD chart (dual-axis time series) ---------------------
+
+export function renderOiCvdChartPng(d: OiCvdChartData): Buffer {
+  const OW = 1200;
+  const oPadL = 84;
+  const oPadR = 84;
+  const oPadT = 58;
+  const oPlotH = 400;
+  const oFooter = 70;
+  const OH = oPadT + oPlotH + oFooter;
+  const ax0 = oPadL;
+  const ax1 = OW - oPadR;
+  const aTop = oPadT;
+  const aBot = oPadT + oPlotH;
+
+  const allT = [...d.oi.map((p) => p.t), ...d.cvd.map((p) => p.t)];
+  const tMin = Math.min(...allT);
+  const tMax = Math.max(...allT);
+  const tx = (t: number) => ax0 + ((t - tMin) / (tMax - tMin || 1)) * (ax1 - ax0);
+
+  const oiVals = d.oi.map((p) => p.v);
+  const oiMin = Math.min(...oiVals);
+  const oiMax = Math.max(...oiVals);
+  const oiY = (v: number) => aBot - ((v - oiMin) / (oiMax - oiMin || 1)) * oPlotH;
+
+  const cvdVals = d.cvd.map((p) => p.v);
+  const cMax = Math.max(1e-9, ...cvdVals.map(Math.abs));
+  const cvdY = (v: number) => (aTop + aBot) / 2 - (v / cMax) * (oPlotH / 2 - 10);
+
+  const el: string[] = [];
+  el.push(`<rect width="${OW}" height="${OH}" fill="${BG}"/>`);
+  el.push(`<text x="${ax0}" y="34" font-size="22" font-weight="bold" fill="${TEXT}">${esc(d.coin)} · Open Interest + CVD</text>`);
+  el.push(`<text x="${ax1}" y="34" font-size="13" fill="${MUTED}" text-anchor="end">${esc(d.interval)} · Binance perp</text>`);
+
+  // Gridlines + OI axis (left).
+  for (let g = 0; g <= 4; g++) {
+    const v = oiMin + ((oiMax - oiMin) * g) / 4;
+    const yy = oiY(v);
+    el.push(`<line x1="${ax0}" y1="${r1(yy)}" x2="${ax1}" y2="${r1(yy)}" stroke="${GRID}" stroke-width="1"/>`);
+    el.push(`<text x="${ax0 - 8}" y="${r1(yy + 4)}" font-size="11" fill="${GREEN}" text-anchor="end">${(v / 1000).toFixed(1)}k</text>`);
+  }
+  // CVD zero baseline (right axis reference).
+  el.push(`<line x1="${ax0}" y1="${r1(cvdY(0))}" x2="${ax1}" y2="${r1(cvdY(0))}" stroke="${CLAY}" stroke-width="1" stroke-dasharray="3 4" opacity="0.5"/>`);
+  el.push(`<text x="${ax1 + 8}" y="${r1(cvdY(0) + 4)}" font-size="11" fill="${CLAY}">0</text>`);
+  el.push(`<text x="${ax1 + 8}" y="${r1(cvdY(cMax) + 4)}" font-size="11" fill="${CLAY}">+${(cMax / 1000).toFixed(1)}k</text>`);
+  el.push(`<text x="${ax1 + 8}" y="${r1(cvdY(-cMax) + 4)}" font-size="11" fill="${CLAY}">-${(cMax / 1000).toFixed(1)}k</text>`);
+
+  // OI line (green).
+  const oiPts = d.oi.map((p) => `${r1(tx(p.t))},${r1(oiY(p.v))}`).join(' ');
+  el.push(`<polyline points="${oiPts}" fill="none" stroke="${GREEN}" stroke-width="2"/>`);
+  // CVD line (clay).
+  const cvdPts = d.cvd.map((p) => `${r1(tx(p.t))},${r1(cvdY(p.v))}`).join(' ');
+  el.push(`<polyline points="${cvdPts}" fill="none" stroke="${CLAY}" stroke-width="2"/>`);
+
+  // Time axis (a few labels).
+  for (let i = 0; i <= 4; i++) {
+    const t = tMin + ((tMax - tMin) * i) / 4;
+    const dt = new Date(t);
+    const lbl = `${String(dt.getUTCMonth() + 1)}/${String(dt.getUTCDate())} ${String(dt.getUTCHours()).padStart(2, '0')}:00`;
+    el.push(`<text x="${r1(tx(t))}" y="${aBot + 18}" font-size="11" fill="${FAINT}" text-anchor="middle">${lbl}</text>`);
+  }
+
+  // Legend row (below the time axis, above the footer).
+  const legY = aBot + 40;
+  el.push(`<circle cx="${ax0 + 6}" cy="${r1(legY - 4)}" r="5" fill="${GREEN}"/>`);
+  el.push(`<text x="${ax0 + 18}" y="${r1(legY)}" font-size="13" fill="${TEXT}">Open interest ${d.oiChangePct >= 0 ? '+' : ''}${d.oiChangePct}% over window</text>`);
+  el.push(`<circle cx="${ax0 + 360}" cy="${r1(legY - 4)}" r="5" fill="${CLAY}"/>`);
+  el.push(`<text x="${ax0 + 372}" y="${r1(legY)}" font-size="13" fill="${TEXT}">CVD ${d.cvdEnd >= 0 ? '+' : ''}${(d.cvdEnd / 1000).toFixed(1)}k (net taker delta)</text>`);
+
+  const fy = OH - 14;
+  el.push(`<text x="${ax0}" y="${fy}" font-size="12" fill="${FAINT}">Not financial advice · OI up with price = new positioning; CVD = net aggressor delta · ${fmtUtcHm(new Date())}</text>`);
+  el.push(`<text x="${ax1}" y="${fy}" font-size="12" fill="${FAINT}" text-anchor="end">pipinvest.xyz</text>`);
+
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${OW}" height="${OH}" font-family="JetBrains Mono">${el.join('')}</svg>`;
   return rasterizeSvg(svg);
 }

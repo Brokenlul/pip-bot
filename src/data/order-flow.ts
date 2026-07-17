@@ -250,6 +250,60 @@ export async function orderFlowChartData(coin: string): Promise<OrderFlowChartDa
   return data;
 }
 
+// ---- Open Interest + CVD time series (Binance futures) --------------------
+// OI history from Binance's openInterestHist; a candle-based CVD from klines'
+// taker-buy volume (delta = 2*takerBuyBase - volume) so both series share the
+// same timeframe. Binance-only (Hyperliquid has no OI-history REST endpoint).
+
+export interface OiCvdChartData {
+  coin: string;
+  interval: string;
+  oi: { t: number; v: number }[];
+  cvd: { t: number; v: number }[];
+  oiChangePct: number;
+  cvdEnd: number;
+}
+
+const oiCache = makeCache<OiCvdChartData>(60_000);
+
+export async function oiCvdChartData(coin: string, interval = '1h'): Promise<OiCvdChartData> {
+  const sym = coin.trim().replace(/^\$/, '').toUpperCase();
+  const pair = `${sym}USDT`;
+  const key = `${sym}:${interval}`;
+  const hit = oiCache.get(key);
+  if (hit) return hit;
+
+  const [kRes, oRes] = await Promise.all([
+    fetchWithTimeout(`${FAPI}/klines?symbol=${pair}&interval=${interval}&limit=100`),
+    fetchWithTimeout(`https://fapi.binance.com/futures/data/openInterestHist?symbol=${pair}&period=${interval}&limit=100`),
+  ]);
+  if (kRes.status === 400 || oRes.status === 400) throw new Error(`"${sym}" isn't on Binance futures (OI history is Binance-only).`);
+  if (!kRes.ok || !oRes.ok) throw new Error(`binance oi/klines ${kRes.status}/${oRes.status}`);
+  const klines = (await kRes.json()) as (string | number)[][];
+  const oiHist = (await oRes.json()) as { sumOpenInterest: string; timestamp: number }[];
+
+  let run = 0;
+  const cvd = klines.map((k) => {
+    const vol = Number(k[5]);
+    const takerBuy = Number(k[9]);
+    run += 2 * takerBuy - vol; // taker buy minus taker sell
+    return { t: Number(k[0]), v: round(run, 2) };
+  });
+  const oi = oiHist.map((o) => ({ t: o.timestamp, v: Number(o.sumOpenInterest) }));
+  const oiFirst = oi[0]?.v ?? 0;
+  const oiLast = oi[oi.length - 1]?.v ?? 0;
+  const data: OiCvdChartData = {
+    coin: sym,
+    interval,
+    oi,
+    cvd,
+    oiChangePct: oiFirst ? round(((oiLast - oiFirst) / oiFirst) * 100, 2) : 0,
+    cvdEnd: cvd[cvd.length - 1]?.v ?? 0,
+  };
+  oiCache.set(key, data);
+  return data;
+}
+
 export const orderFlowTool: Tool<Input, Output> = {
   name: 'order_flow',
   description:

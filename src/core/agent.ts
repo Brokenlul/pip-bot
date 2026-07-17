@@ -28,7 +28,7 @@ import { cryptoPriceTool } from '../data/coingecko.js';
 import { fundingRateTool } from '../data/hyperliquid.js';
 import { orderFlowTool } from '../data/order-flow.js';
 import { whalePositionsTool } from '../data/hl-whales.js';
-import { priceChartTool, indicatorSnapshotTool, orderFlowChartTool } from '../data/chart-tool.js';
+import { priceChartTool, indicatorSnapshotTool, orderFlowChartTool, profileChartTool, oiCvdChartTool } from '../data/chart-tool.js';
 import { fedCalendarTool } from '../data/fed-calendar.js';
 import { dexScreenerTool } from '../data/dexscreener.js';
 import { tokenScanTool } from '../data/token-scan.js';
@@ -173,6 +173,16 @@ Reading order flow (a trader asks about the order book, the tape, bids vs asks, 
 - Read walls with skepticism: a big resting bid/ask can be real support/resistance or a spoof that vanishes when price arrives, say which you think it is and why, never treat a wall as a guarantee.
 - Majors return full book + flow (Binance perps); HIP-3 / HL-only coins return book only (flow_available false), say plainly that tape flow isn't available for that market rather than inventing a CVD. Same rule as always: describe what the flow shows, never turn it into a buy/sell call.
 
+Volume / market profile and open interest + CVD (attach on request, part of the order-flow toolkit):
+- render_profile draws a Volume Profile (type "volume": volume traded at each price with POC + 70% value area) or a Market Profile / TPO (type "tpo": time spent at each price). Use for "volume profile", "market profile", "TPO", "POC", "value area", or "where has price traded the most volume/time". It is built from candles (the standard free approximation), say it reads that way, and reference the POC (fair-value magnet) and the value-area edges (where acceptance flips) in your read.
+- render_oi_cvd draws open interest over time alongside CVD. Use for "open interest", "OI trend", "is OI building or unwinding", positioning, or OI + CVD together. Read them jointly: OI up + price up + CVD up = new longs pressing; OI up + price down = new shorts; OI falling into a move = an unwind or squeeze, not fresh conviction. Binance majors only.
+- VWAP already exists: call render_price_chart with the vwap indicator, never claim you lack VWAP.
+
+Order-flow visuals you CANNOT do faithfully (be honest, offer the real alternative, NEVER fabricate one, a faked one is the exact credibility hit to avoid):
+- Liquidation heatmap: the Coinglass-style predicted-liquidation map is a proprietary model over paid data you don't have. Do not draw or invent one. Offer instead an honest leverage read: open interest, funding, and render_oi_cvd showing where leverage is stacked and which side is offside.
+- Bookmap-style heatmap: that needs the order book recorded over TIME, which you can't stream, you only see the book right now. Offer render_order_flow_chart (the current depth snapshot) as the honest alternative.
+- Historical footprint: a real footprint needs per-candle tick data you don't have in bulk. Say so plainly; the depth + CVD snapshot is the closest live read. Never present an approximation as the real footprint or heatmap.
+
 Backtesting a framework or claim against real history ("can you backtest this", "is this true historically", "what happened last time X", a screenshot of a trading framework someone wants checked):
 - NEVER eyeball this from memory or a chart screenshot alone, and never fabricate a historical instance. Call historical_swings for the actual symbol(s)/interval/lookback and reason from the real swing dates and prices it returns, this is a hard version of "fetch, don't guess."
 - State your method in one line (symbols, interval, lookback), then walk the ACTUAL instances it found, cite real dates and prices, never invented examples. Give a count or hit-rate ("alts held a higher low in 9 of the last 14 BTC swing lows since Jan 2024, 64%"), not a vibe.
@@ -254,6 +264,8 @@ function buildRegistry(): ToolRegistry {
     .register(fundingRateTool)
     .register(orderFlowTool)
     .register(orderFlowChartTool)
+    .register(profileChartTool)
+    .register(oiCvdChartTool)
     .register(whalePositionsTool)
     .register(priceChartTool)
     .register(indicatorSnapshotTool)

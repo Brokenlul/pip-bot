@@ -12,8 +12,9 @@ import {
   SubPane,
 } from '../core/candle-chart.js';
 import { sma, ema, rsi, macd, vwap, bollinger, fvgZones, Series } from '../core/indicators.js';
-import { renderOrderFlowChartPng } from '../core/orderflow-chart.js';
-import { orderFlowChartData } from './order-flow.js';
+import { renderOrderFlowChartPng, renderOiCvdChartPng } from '../core/orderflow-chart.js';
+import { renderProfileChartPng } from '../core/profile-chart.js';
+import { orderFlowChartData, oiCvdChartData } from './order-flow.js';
 
 /**
  * render_price_chart, draws a Pip-branded candlestick chart (Hyperliquid
@@ -369,6 +370,158 @@ export const orderFlowChartTool: Tool<OfChartInput, OfChartOutput> = {
     }, `order-flow-chart:${input.coin}`);
   },
   citation: (_, out) => ({ label: `Order-flow chart (${out.coin})`, url: out.source_url }),
+};
+
+// ---- render_profile (volume profile / market profile TPO) -------------------
+// Horizontal histogram of activity by price from candles: volume-at-price
+// (volume profile) or time-at-price (TPO / market profile), with POC + 70%
+// value area. The standard free-data approximation (volume spread across each
+// candle's range).
+
+const ProfileInputSchema = z.object({
+  coin: z.string().min(1).describe('Ticker, e.g. "BTC", "ETH", "SOL". No $ prefix.'),
+  interval: z.enum(INTERVALS).optional().describe('Candle timeframe (default "1h").'),
+  type: z.enum(['volume', 'tpo']).optional().describe('"volume" = Volume Profile (default), "tpo" = Market Profile / TPO (time at price).'),
+});
+type ProfileInput = z.infer<typeof ProfileInputSchema>;
+interface ProfileOutput {
+  chart_attached: boolean;
+  coin: string;
+  mode: 'volume' | 'tpo';
+  interval: Interval;
+  poc: number;
+  value_area_low: number;
+  value_area_high: number;
+  last_price: number;
+  source_url: string;
+}
+
+function buildProfile(candles: Candle[], mode: 'volume' | 'tpo', numBuckets = 48) {
+  const lo = Math.min(...candles.map((c) => c.l));
+  const hi = Math.max(...candles.map((c) => c.h));
+  const size = (hi - lo) / numBuckets || 1;
+  const vals = new Array<number>(numBuckets).fill(0);
+  for (const c of candles) {
+    const bLo = Math.max(0, Math.floor((c.l - lo) / size));
+    const bHi = Math.min(numBuckets - 1, Math.floor((c.h - lo) / size));
+    const span = bHi - bLo + 1;
+    const per = mode === 'volume' ? c.v / span : 1; // volume split across the range; TPO = 1 per touched bucket
+    for (let b = bLo; b <= bHi; b++) vals[b] = (vals[b] ?? 0) + per;
+  }
+  const buckets = vals.map((v, i) => ({ price: lo + (i + 0.5) * size, value: v }));
+  let pocIdx = 0;
+  for (let i = 1; i < numBuckets; i++) if ((vals[i] ?? 0) > (vals[pocIdx] ?? 0)) pocIdx = i;
+  const total = vals.reduce((a, b) => a + b, 0) || 1;
+  let loI = pocIdx;
+  let hiI = pocIdx;
+  let acc = vals[pocIdx] ?? 0;
+  while (acc < total * 0.7 && (loI > 0 || hiI < numBuckets - 1)) {
+    const below = loI > 0 ? (vals[loI - 1] ?? 0) : -1;
+    const above = hiI < numBuckets - 1 ? (vals[hiI + 1] ?? 0) : -1;
+    if (above >= below) acc += vals[++hiI] ?? 0;
+    else acc += vals[--loI] ?? 0;
+  }
+  return {
+    buckets,
+    poc: buckets[pocIdx]!.price,
+    vaLow: (buckets[loI]?.price ?? lo) - size / 2,
+    vaHigh: (buckets[hiI]?.price ?? hi) + size / 2,
+    last: candles[candles.length - 1]!.c,
+  };
+}
+
+export const profileChartTool: Tool<ProfileInput, ProfileOutput> = {
+  name: 'render_profile',
+  description:
+    'Draw a branded VOLUME PROFILE or MARKET PROFILE (TPO) and ATTACH it: a horizontal histogram of activity by price, with the POC (point of control) and the 70% value area marked. type="volume" shows volume traded at each price; type="tpo" shows time spent at each price (market profile). Use when a trader asks for a volume profile, market profile, TPO, POC, value area, or "where has most volume/time traded". Built from candles (the standard free-data approximation); mention it reads that way. NOT a candlestick chart.',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      coin: { type: 'string', description: 'Ticker, e.g. "BTC". No $ prefix.' },
+      interval: { type: 'string', enum: [...INTERVALS], description: 'Candle timeframe; default "1h".' },
+      type: { type: 'string', enum: ['volume', 'tpo'], description: '"volume" (default) or "tpo" for market profile.' },
+    },
+    required: ['coin'],
+  },
+  validate: zValidator(ProfileInputSchema),
+  execute: async (input, ctx) => {
+    return withRetry(async () => {
+      const interval = input.interval ?? '1h';
+      const mode = input.type ?? 'volume';
+      const coin = await resolveCoinName(input.coin);
+      if (!coin) throw new Error(`Coin "${input.coin}" not found on Hyperliquid, confirm the ticker.`);
+      const candles = await fetchCandles(coin, interval);
+      if (candles.length < 10) throw new Error(`Not enough candle data for a ${coin} profile on ${interval}.`);
+      const p = buildProfile(candles, mode);
+      const png = renderProfileChartPng({ coin, mode, interval: interval.toUpperCase(), buckets: p.buckets, poc: p.poc, vaLow: p.vaLow, vaHigh: p.vaHigh, last: p.last });
+      const filename = `pip-${mode}-profile-${coin.toLowerCase().replace(/[^a-z0-9]+/g, '-')}-${interval}.png`;
+      const attached = ctx.attachImage?.(filename, png) ?? false;
+      if (!attached) throw new Error('Chart limit for this reply reached, refer to the chart already attached.');
+      return {
+        chart_attached: true,
+        coin,
+        mode,
+        interval,
+        poc: p.poc,
+        value_area_low: p.vaLow,
+        value_area_high: p.vaHigh,
+        last_price: p.last,
+        source_url: `https://app.hyperliquid.xyz/trade/${coin}`,
+      };
+    }, `profile:${input.coin}:${input.type ?? 'volume'}`);
+  },
+  citation: (_, out) => ({ label: `${out.mode === 'volume' ? 'Volume' : 'Market'} profile (${out.coin} ${out.interval})`, url: out.source_url }),
+};
+
+// ---- render_oi_cvd (open interest + CVD) ------------------------------------
+
+const OiCvdInputSchema = z.object({
+  coin: z.string().min(1).describe('Ticker, e.g. "BTC", "ETH". No $ prefix. Binance-listed majors only.'),
+  interval: z.enum(INTERVALS).optional().describe('Timeframe for the OI/CVD history (default "1h").'),
+});
+type OiCvdInput = z.infer<typeof OiCvdInputSchema>;
+interface OiCvdOutput {
+  chart_attached: boolean;
+  coin: string;
+  interval: Interval;
+  oi_change_pct: number;
+  cvd_end: number;
+  source_url: string;
+}
+
+export const oiCvdChartTool: Tool<OiCvdInput, OiCvdOutput> = {
+  name: 'render_oi_cvd',
+  description:
+    'Draw an OPEN INTEREST + CVD chart and ATTACH it: open interest over time (are positions building or unwinding) plotted with cumulative volume delta (net aggressor buying vs selling) on the same timeframe. Use when a trader asks for open interest + CVD, OI trend, "is OI building", positioning, or aggressor delta over time. Binance futures majors only (OI history is Binance-only). Reference the OI change and CVD in your read (OI up + CVD up + price up = new longs; OI up + price down = new shorts).',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      coin: { type: 'string', description: 'Ticker, e.g. "BTC". No $ prefix.' },
+      interval: { type: 'string', enum: [...INTERVALS], description: 'Timeframe; default "1h".' },
+    },
+    required: ['coin'],
+  },
+  validate: zValidator(OiCvdInputSchema),
+  execute: async (input, ctx) => {
+    return withRetry(async () => {
+      const interval = input.interval ?? '1h';
+      const d = await oiCvdChartData(input.coin, interval);
+      if (d.oi.length < 3 || d.cvd.length < 3) throw new Error(`Not enough OI/CVD history for ${d.coin} on ${interval}.`);
+      const png = renderOiCvdChartPng(d);
+      const filename = `pip-oi-cvd-${d.coin.toLowerCase()}-${interval}.png`;
+      const attached = ctx.attachImage?.(filename, png) ?? false;
+      if (!attached) throw new Error('Chart limit for this reply reached, refer to the chart already attached.');
+      return {
+        chart_attached: true,
+        coin: d.coin,
+        interval,
+        oi_change_pct: d.oiChangePct,
+        cvd_end: d.cvdEnd,
+        source_url: `https://www.binance.com/en/futures/${d.coin}USDT`,
+      };
+    }, `oi-cvd:${input.coin}:${input.interval ?? '1h'}`);
+  },
+  citation: (_, out) => ({ label: `OI + CVD (${out.coin} ${out.interval})`, url: out.source_url }),
 };
 
 // ---- indicator_snapshot -----------------------------------------------------
