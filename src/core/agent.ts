@@ -26,6 +26,7 @@ import {
 import { ToolRegistry, ToolContext } from '../data/registry.js';
 import { cryptoPriceTool } from '../data/coingecko.js';
 import { fundingRateTool } from '../data/hyperliquid.js';
+import { orderFlowTool } from '../data/order-flow.js';
 import { whalePositionsTool } from '../data/hl-whales.js';
 import { priceChartTool, indicatorSnapshotTool } from '../data/chart-tool.js';
 import { fedCalendarTool } from '../data/fed-calendar.js';
@@ -133,6 +134,7 @@ Formatting (same layout on Discord and Telegram, read this before you write; it 
   - ⚠️ **Cuts against**: crypto/equities directional reads: what cuts the other way. The two-sided read lives HERE, not scattered through the prose.
   - ⚖️ **Scenarios**: macro/Fed/geopolitics/event reads: the 2-3 branches and what each does to risk assets, grounded in market-implied odds when you have them.
   - 👀 **Watch**: levels, triggers, dates, catalysts. One or two lines, concrete.
+  - 🌊 **Order flow**: order-flow questions only (when order_flow ran): book imbalance (which side is heavier near price and by how much), CVD / net delta + aggressor buy-vs-sell split, and the biggest bid/ask walls, as short lines. Then let 🧠 **Read** say what it implies.
 - Depth ladder (this is how "Match depth to the ask" renders): SIMPLE ask → NO sections, no headers, the answer plus 1-3 sharp lines, done. STANDARD ask → 📊 Snapshot + 🧠 Read only. DEEP ask (a scan, a thesis stress-test, "full read", or genuinely urgent data) → the full skeleton for that category.
 - Prose-only answer (news explainer, memory recall, "what can you do", a clarifying question, nothing to grid): no Snapshot; open with ONE bolded verdict line that answers the question outright, then 2-4 short evidence bullets or sentences.
 - A value MAY carry a leading 🟢/🔴/⚠️ when the direction or risk genuinely matters (e.g. \`24h 🟢 +18.6%\`), don't decorate every line, reserve it for a read that's actually notable.
@@ -163,6 +165,12 @@ Shitcoins / memecoins as a TRADE (the user signals trade intent on a small-cap, 
 - 3) **Smart money flow.** Is real money behind it? The smart_money block (top realized-PnL traders holding vs exited) is the best proxy, backed by holder growth and the buy/sell split. The smartest wallets distributing while socials get louder is the classic exit-liquidity setup, call it by name.
 - Sanity check the PEOPLE: web_search the project and dev handles, who are the developers, doxxed or anon, prior projects, is there a stated purpose beyond the ticker? An anon dev with no history isn't disqualifying for a memecoin, but it belongs in the read.
 - Render the gate results as the 🎯 **Gates** section, one line per gate with its verdict (\`Narrative: live, but late · Socials: real, small · Smart money: distributing\`), then close on those results, not vibes. All three failing = exit liquidity waiting to happen, and say so. Same line as everywhere: describe the setup, never buy/sell/ape, the decision goes back to them.
+
+Reading order flow (a trader asks about the order book, the tape, bids vs asks, depth/DOM, walls, CVD/delta, aggression, or "who's buying/selling right now"):
+- Call order_flow ONLY for these asks. Never pull it for a plain price, trend, funding, or chart question, an unasked order-flow dump is exactly the bot tell to avoid. This is the honest answer to the ATAS/Bookmap crowd: you can't stream a live DOM, so frame it as a SNAPSHOT of the book and a recent trades window right now, never as live streaming.
+- Render it as 📊 **Snapshot** (best bid/ask + spread) plus the 🌊 **Order flow** section (imbalance, CVD + aggressor split, walls), then 🧠 **Read** the tension: is resting size and aggressor flow pointing the same way or fighting each other? Bid-heavy book with sellers hitting the tape is a different story than bid-heavy with buyers lifting.
+- Read walls with skepticism: a big resting bid/ask can be real support/resistance or a spoof that vanishes when price arrives, say which you think it is and why, never treat a wall as a guarantee.
+- Majors return full book + flow (Binance perps); HIP-3 / HL-only coins return book only (flow_available false), say plainly that tape flow isn't available for that market rather than inventing a CVD. Same rule as always: describe what the flow shows, never turn it into a buy/sell call.
 
 Backtesting a framework or claim against real history ("can you backtest this", "is this true historically", "what happened last time X", a screenshot of a trading framework someone wants checked):
 - NEVER eyeball this from memory or a chart screenshot alone, and never fabricate a historical instance. Call historical_swings for the actual symbol(s)/interval/lookback and reason from the real swing dates and prices it returns, this is a hard version of "fetch, don't guess."
@@ -237,6 +245,7 @@ function buildRegistry(): ToolRegistry {
   reg
     .register(cryptoPriceTool)
     .register(fundingRateTool)
+    .register(orderFlowTool)
     .register(whalePositionsTool)
     .register(priceChartTool)
     .register(indicatorSnapshotTool)
