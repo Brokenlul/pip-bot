@@ -395,9 +395,9 @@ function fontsDirPath(): string {
   return path.resolve(process.cwd(), 'assets', 'fonts');
 }
 
-/** Rasterize the branded SVG to a PNG buffer (Discord/Telegram attachment). */
-export function renderCandleChartPng(spec: ChartSpec): Buffer {
-  const svg = candleChartSvg(spec);
+/** Rasterize any Pip-branded SVG to a PNG buffer with the bundled fonts. Shared
+ *  by the candlestick chart and the order-flow chart. */
+export function rasterizeSvg(svg: string): Buffer {
   const fontsDir = fontsDirPath();
   if (!existsSync(path.join(fontsDir, 'JetBrainsMono-Regular.ttf'))) {
     // Fail loudly — a chart with invisible text must never ship to a user.
@@ -414,6 +414,11 @@ export function renderCandleChartPng(spec: ChartSpec): Buffer {
     },
   });
   return Buffer.from(resvg.render().asPng());
+}
+
+/** Rasterize the branded candlestick SVG to a PNG buffer (Discord/Telegram attachment). */
+export function renderCandleChartPng(spec: ChartSpec): Buffer {
+  return rasterizeSvg(candleChartSvg(spec));
 }
 
 // ---- helpers ----------------------------------------------------------------

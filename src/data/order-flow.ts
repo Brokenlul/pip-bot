@@ -182,6 +182,74 @@ async function fetchHyperliquid(sym: string): Promise<Output> {
   return { ...base, flow_available: false };
 }
 
+// ---- Chart data (depth ladder + CVD time series) --------------------------
+// Separate from the text tool's Output (which stays small for the model). The
+// depth chart needs the full ladder; the CVD strip needs a time series. Reuses
+// the same keyless endpoints; the render tool calls this.
+
+export interface OrderFlowChartData {
+  coin: string;
+  venue: 'binance-futures' | 'hyperliquid';
+  mid: number;
+  bids: Level[]; // descending from best bid
+  asks: Level[]; // ascending from best ask
+  cvd: { t: number; v: number }[] | null; // cumulative delta series; null = no tape flow
+}
+
+const chartCache = makeCache<OrderFlowChartData>(15_000);
+
+export async function orderFlowChartData(coin: string): Promise<OrderFlowChartData> {
+  const sym = coin.trim().replace(/^\$/, '').toUpperCase();
+  const hit = chartCache.get(sym);
+  if (hit) return hit;
+
+  const pair = `${sym}USDT`;
+  const depthRes = await fetchWithTimeout(`${FAPI}/depth?symbol=${pair}&limit=1000`);
+  if (depthRes.status !== 400) {
+    if (!depthRes.ok) throw new Error(`binance depth ${depthRes.status}`);
+    const depth = (await depthRes.json()) as { bids: [string, string][]; asks: [string, string][] };
+    const bids: Level[] = depth.bids.map(([p, s]) => ({ px: Number(p), sz: Number(s) }));
+    const asks: Level[] = depth.asks.map(([p, s]) => ({ px: Number(p), sz: Number(s) }));
+    const bb = bids[0];
+    const ba = asks[0];
+    if (!bb || !ba) throw new Error(`binance depth empty for ${pair}`);
+    const mid = (bb.px + ba.px) / 2;
+
+    let cvd: { t: number; v: number }[] | null = null;
+    try {
+      const tRes = await fetchWithTimeout(`${FAPI}/aggTrades?symbol=${pair}&limit=1000`);
+      if (tRes.ok) {
+        const trades = (await tRes.json()) as { p: string; q: string; m: boolean; T: number }[];
+        if (trades.length) {
+          let running = 0;
+          cvd = trades.map((t) => {
+            running += t.m === false ? Number(t.q) : -Number(t.q);
+            return { t: t.T, v: round(running, 3) };
+          });
+        }
+      }
+    } catch {
+      cvd = null;
+    }
+    const data: OrderFlowChartData = { coin: sym, venue: 'binance-futures', mid, bids, asks, cvd };
+    chartCache.set(sym, data);
+    return data;
+  }
+
+  // Hyperliquid fallback (book only).
+  const name = await resolveCoinName(sym);
+  if (!name) throw new Error(`"${sym}" not found on Binance futures or Hyperliquid. Check the ticker.`);
+  const book = await hlInfo<{ levels: [Array<{ px: string; sz: string }>, Array<{ px: string; sz: string }>] }>({ type: 'l2Book', coin: name });
+  const bids: Level[] = book.levels[0].map((l) => ({ px: Number(l.px), sz: Number(l.sz) }));
+  const asks: Level[] = book.levels[1].map((l) => ({ px: Number(l.px), sz: Number(l.sz) }));
+  const bb = bids[0];
+  const ba = asks[0];
+  if (!bb || !ba) throw new Error(`hyperliquid l2Book empty for ${name}`);
+  const data: OrderFlowChartData = { coin: name, venue: 'hyperliquid', mid: (bb.px + ba.px) / 2, bids, asks, cvd: null };
+  chartCache.set(sym, data);
+  return data;
+}
+
 export const orderFlowTool: Tool<Input, Output> = {
   name: 'order_flow',
   description:

@@ -12,9 +12,11 @@ import {
   SubPane,
 } from '../core/candle-chart.js';
 import { sma, ema, rsi, macd, vwap, bollinger, fvgZones, Series } from '../core/indicators.js';
+import { renderOrderFlowChartPng } from '../core/orderflow-chart.js';
+import { orderFlowChartData } from './order-flow.js';
 
 /**
- * render_price_chart — draws a Pip-branded candlestick chart (Hyperliquid
+ * render_price_chart, draws a Pip-branded candlestick chart (Hyperliquid
  * candles, rendered locally, zero cost) with optional levels and indicators,
  * and attaches the PNG to the reply via ToolContext.attachImage. The model
  * gets a JSON summary (including current indicator values) back; the image
@@ -50,7 +52,7 @@ const INDICATORS = [
 ] as const;
 type Indicator = (typeof INDICATORS)[number];
 
-// Overlay palette — distinct from the level colors (entry white / stop clay /
+// Overlay palette, distinct from the level colors (entry white / stop clay /
 // target green / level blue) so lines stay tellable-apart.
 const OVERLAY_COLOR: Record<string, string> = {
   ema20: '#E8C15A',
@@ -97,7 +99,7 @@ interface Output {
   levels_drawn: number;
   levels_skipped: string[];
   indicators_drawn: string[];
-  /** Current values of what was drawn — reference these in the answer. */
+  /** Current values of what was drawn, reference these in the answer. */
   indicator_readout: Record<string, string>;
   source_url: string;
 }
@@ -219,7 +221,7 @@ function buildIndicators(
 export const priceChartTool: Tool<Input, Output> = {
   name: 'render_price_chart',
   description:
-    'Draw a branded candlestick chart image (Hyperliquid candles: any standard perp like BTC/ETH/SOL/HYPE/LINK, plus builder markets like TSLA/BOT) and ATTACH it to your reply automatically. Options: up to 6 horizontal levels (entry / stop / target / level, each with price + short label) AND indicators — ema20/ema50/ema100/ema200, sma20/sma50, vwap, bollinger, macd, rsi (drawn as sub-panes), fvg (unfilled fair-value-gap zones, the objective SMC building block). Use it whenever a user asks to SEE something on a chart or asks for an indicator ("use MACD", "add RSI", "show the EMAs", "mark the FVGs"). The tool result includes indicator_readout with the current values — weave those numbers into your answer. You CAN render charts with indicators — never claim you cannot. What you cannot do: annotate someone else\'s screenshot or replicate a proprietary paid indicator suite (e.g. full LuxAlgo SMC labels) — offer the closest of your own instead.',
+    'Draw a branded candlestick chart image (Hyperliquid candles: any standard perp like BTC/ETH/SOL/HYPE/LINK, plus builder markets like TSLA/BOT) and ATTACH it to your reply automatically. Options: up to 6 horizontal levels (entry / stop / target / level, each with price + short label) AND indicators, ema20/ema50/ema100/ema200, sma20/sma50, vwap, bollinger, macd, rsi (drawn as sub-panes), fvg (unfilled fair-value-gap zones, the objective SMC building block). Use it whenever a user asks to SEE something on a chart or asks for an indicator ("use MACD", "add RSI", "show the EMAs", "mark the FVGs"). The tool result includes indicator_readout with the current values, weave those numbers into your answer. You CAN render charts with indicators, never claim you cannot. What you cannot do: annotate someone else\'s screenshot or replicate a proprietary paid indicator suite (e.g. full LuxAlgo SMC labels), offer the closest of your own instead.',
   inputSchema: {
     type: 'object',
     properties: {
@@ -237,7 +239,7 @@ export const priceChartTool: Tool<Input, Output> = {
           type: 'object',
           properties: {
             price: { type: 'number', description: 'Price of the level.' },
-            label: { type: 'string', description: 'Short label, e.g. "entry", "SL — thesis broken", "TP zone".' },
+            label: { type: 'string', description: 'Short label, e.g. "entry", "SL, thesis broken", "TP zone".' },
             kind: {
               type: 'string',
               enum: ['entry', 'stop', 'target', 'level'],
@@ -263,7 +265,7 @@ export const priceChartTool: Tool<Input, Output> = {
       async () => {
         const interval = input.interval ?? '1h';
         const coin = await resolveCoinName(input.coin);
-        if (!coin) throw new Error(`Coin "${input.coin}" not found on Hyperliquid — confirm the ticker.`);
+        if (!coin) throw new Error(`Coin "${input.coin}" not found on Hyperliquid, confirm the ticker.`);
         const all = await fetchCandles(coin, interval);
         if (all.length < 2) throw new Error(`No candle data for ${coin} on ${interval}.`);
         const candles = all.slice(-DISPLAY_COUNT);
@@ -294,7 +296,7 @@ export const priceChartTool: Tool<Input, Output> = {
         });
         const filename = `pip-chart-${coin.toLowerCase().replace(/[^a-z0-9]+/g, '-')}-${interval}.png`;
         const attached = ctx.attachImage?.(filename, png) ?? false;
-        if (!attached) throw new Error('Chart limit for this reply reached — refer to the chart already attached.');
+        if (!attached) throw new Error('Chart limit for this reply reached, refer to the chart already attached.');
 
         const first = candles[0]!;
         const last = candles[candles.length - 1]!;
@@ -319,6 +321,54 @@ export const priceChartTool: Tool<Input, Output> = {
     );
   },
   citation: (_, out) => ({ label: `Hyperliquid candles (${out.coin} ${out.interval})`, url: out.source_url }),
+};
+
+// ---- render_order_flow_chart ------------------------------------------------
+// Depth chart (cumulative bid/ask liquidity around mid) + a CVD strip, attached
+// to the reply. Pairs with the order_flow text tool; use when a trader asks to
+// SEE the order flow / book / depth, not for plain price charts.
+
+const OfChartInputSchema = z.object({
+  coin: z.string().min(1).describe('Ticker, e.g. "BTC", "ETH", "SOL". No $ prefix, no /USDT.'),
+});
+type OfChartInput = z.infer<typeof OfChartInputSchema>;
+interface OfChartOutput {
+  chart_attached: boolean;
+  coin: string;
+  venue: string;
+  flow_available: boolean;
+  source_url: string;
+}
+
+export const orderFlowChartTool: Tool<OfChartInput, OfChartOutput> = {
+  name: 'render_order_flow_chart',
+  description:
+    'Draw a branded ORDER-FLOW chart and ATTACH it to your reply: a market-depth view (cumulative bid vs ask resting liquidity around mid) plus a CVD strip (cumulative aggressor delta over the recent tape). Use when a trader asks to SEE the order flow / order book / depth / DOM / bids-asks / walls, or asks to chart the order flow. NOT for candlestick/price charts (use render_price_chart for those). Majors render depth + CVD (Binance perp); other coins (HIP-3 / HL-only) render depth only. Snapshot, not a live stream.',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      coin: { type: 'string', description: 'Ticker, e.g. "BTC", "ETH". No $ prefix.' },
+    },
+    required: ['coin'],
+  },
+  validate: zValidator(OfChartInputSchema),
+  execute: async (input, ctx) => {
+    return withRetry(async () => {
+      const d = await orderFlowChartData(input.coin);
+      const png = renderOrderFlowChartPng(d);
+      const filename = `pip-orderflow-${d.coin.toLowerCase().replace(/[^a-z0-9]+/g, '-')}.png`;
+      const attached = ctx.attachImage?.(filename, png) ?? false;
+      if (!attached) throw new Error('Chart limit for this reply reached, refer to the chart already attached.');
+      return {
+        chart_attached: true,
+        coin: d.coin,
+        venue: d.venue,
+        flow_available: Boolean(d.cvd && d.cvd.length > 1),
+        source_url: d.venue === 'binance-futures' ? `https://www.binance.com/en/futures/${d.coin}USDT` : `https://app.hyperliquid.xyz/trade/${d.coin}`,
+      };
+    }, `order-flow-chart:${input.coin}`);
+  },
+  citation: (_, out) => ({ label: `Order-flow chart (${out.coin})`, url: out.source_url }),
 };
 
 // ---- indicator_snapshot -----------------------------------------------------
@@ -352,7 +402,7 @@ const DEFAULT_SNAPSHOT: Indicator[] = ['ema20', 'ema50', 'ema200', 'rsi', 'macd'
 export const indicatorSnapshotTool: Tool<SnapshotInput, SnapshotOutput> = {
   name: 'indicator_snapshot',
   description:
-    'Current indicator VALUES for any Hyperliquid perp (BTC/ETH/SOL/… + builder markets) on a chosen timeframe, WITHOUT drawing a chart: ema20/50/100/200, sma20/50, vwap, bollinger, macd, rsi, fvg. Returns each value plus an explicit "price is ABOVE/BELOW X by N%" relation. Use this BEFORE stating anything about moving averages, RSI, MACD, or price-vs-level relationships in a text answer — never assert those from memory. Defaults to ema20/ema50/ema200 + rsi + macd.',
+    'Current indicator VALUES for any Hyperliquid perp (BTC/ETH/SOL/… + builder markets) on a chosen timeframe, WITHOUT drawing a chart: ema20/50/100/200, sma20/50, vwap, bollinger, macd, rsi, fvg. Returns each value plus an explicit "price is ABOVE/BELOW X by N%" relation. Use this BEFORE stating anything about moving averages, RSI, MACD, or price-vs-level relationships in a text answer, never assert those from memory. Defaults to ema20/ema50/ema200 + rsi + macd.',
   inputSchema: {
     type: 'object',
     properties: {
@@ -377,7 +427,7 @@ export const indicatorSnapshotTool: Tool<SnapshotInput, SnapshotOutput> = {
       async () => {
         const interval = input.interval ?? '1h';
         const coin = await resolveCoinName(input.coin);
-        if (!coin) throw new Error(`Coin "${input.coin}" not found on Hyperliquid — confirm the ticker.`);
+        if (!coin) throw new Error(`Coin "${input.coin}" not found on Hyperliquid, confirm the ticker.`);
         const all = await fetchCandles(coin, interval);
         if (all.length < 2) throw new Error(`No candle data for ${coin} on ${interval}.`);
         const candles = all.slice(-DISPLAY_COUNT);

@@ -28,7 +28,7 @@ import { cryptoPriceTool } from '../data/coingecko.js';
 import { fundingRateTool } from '../data/hyperliquid.js';
 import { orderFlowTool } from '../data/order-flow.js';
 import { whalePositionsTool } from '../data/hl-whales.js';
-import { priceChartTool, indicatorSnapshotTool } from '../data/chart-tool.js';
+import { priceChartTool, indicatorSnapshotTool, orderFlowChartTool } from '../data/chart-tool.js';
 import { fedCalendarTool } from '../data/fed-calendar.js';
 import { dexScreenerTool } from '../data/dexscreener.js';
 import { tokenScanTool } from '../data/token-scan.js';
@@ -168,6 +168,7 @@ Shitcoins / memecoins as a TRADE (the user signals trade intent on a small-cap, 
 
 Reading order flow (a trader asks about the order book, the tape, bids vs asks, depth/DOM, walls, CVD/delta, aggression, or "who's buying/selling right now"):
 - Call order_flow ONLY for these asks. Never pull it for a plain price, trend, funding, or chart question, an unasked order-flow dump is exactly the bot tell to avoid. This is the honest answer to the ATAS/Bookmap crowd: you can't stream a live DOM, so frame it as a SNAPSHOT of the book and a recent trades window right now, never as live streaming.
+- If they ask to SEE / chart / show / visualize the order flow (or the book/depth/walls visually, or "chart the order flow"), also call render_order_flow_chart to attach the depth + CVD image alongside your text read. Do NOT attach it on a plain text order-flow ask.
 - Render it as 📊 **Snapshot** (best bid/ask + spread) plus the 🌊 **Order flow** section (imbalance, CVD + aggressor split, walls), then 🧠 **Read** the tension: is resting size and aggressor flow pointing the same way or fighting each other? Bid-heavy book with sellers hitting the tape is a different story than bid-heavy with buyers lifting.
 - Read walls with skepticism: a big resting bid/ask can be real support/resistance or a spoof that vanishes when price arrives, say which you think it is and why, never treat a wall as a guarantee.
 - Majors return full book + flow (Binance perps); HIP-3 / HL-only coins return book only (flow_available false), say plainly that tape flow isn't available for that market rather than inventing a CVD. Same rule as always: describe what the flow shows, never turn it into a buy/sell call.
@@ -246,6 +247,7 @@ function buildRegistry(): ToolRegistry {
     .register(cryptoPriceTool)
     .register(fundingRateTool)
     .register(orderFlowTool)
+    .register(orderFlowChartTool)
     .register(whalePositionsTool)
     .register(priceChartTool)
     .register(indicatorSnapshotTool)
