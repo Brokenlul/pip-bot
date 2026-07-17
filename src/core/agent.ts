@@ -51,6 +51,14 @@ import { marketPulseTool } from '../data/pulse-tool.js';
 import { marketIntelTool, marketBackdrop } from '../data/companion.js';
 import { buildReply } from './formatter.js';
 import {
+  sanitizeInbound,
+  fenceToolResult,
+  scanForPromptLeak,
+  scanForSignalLanguage,
+  SAFE_REFUSAL,
+  MAX_INPUT_LEN,
+} from './safety.js';
+import {
   lookupCache,
   persistQA,
   ensureGuild,
@@ -335,8 +343,12 @@ export async function answer(msg: NormalizedMessage, opts: AnswerOptions = {}): 
   const allowScan = opts.allowScan !== false;
   const degraded = opts.degraded === true;
   const maxTokens = beta ? (degraded ? CAPS.perRequest.degradeMaxTokens : CAPS.perRequest.maxTokens) : 2048;
-  // Beta bounds the question length to cap input tokens.
-  const questionText = beta ? (msg.text ?? '').slice(0, CAPS.perUser.maxQuestionLen) : msg.text ?? '';
+  // Clean + bound the raw input ALWAYS (not just under the beta gate): strips
+  // invisible/control/bidi injection chars and caps length. The cap doubles as
+  // cost-abuse protection; sanitizing beats a huge padded prompt reaching the
+  // model or poisoning the cache key. Beta tightens the cap further.
+  const inLen = beta ? CAPS.perUser.maxQuestionLen : MAX_INPUT_LEN;
+  const questionText = sanitizeInbound(msg.text ?? '', inLen);
 
   // Side-effects that must not block or delay the answer. incrementUsage
   // waits for the guild upsert (FK ordering) but the reply waits for neither.
@@ -382,7 +394,7 @@ export async function answer(msg: NormalizedMessage, opts: AnswerOptions = {}): 
   // answer for a brand-new screenshot. Also skip mid-conversation and on reply
   // turns: those depend on live context a canned cache hit would ignore.
   if (isMemoryOn() && !hasImages && thread.length === 0 && !msg.replyToText) {
-    const cached = await lookupCache(msg.guildId, msg.userId, msg.text).catch(() => null);
+    const cached = await lookupCache(msg.guildId, msg.userId, questionText).catch(() => null);
     if (cached) {
       const ageMs = Date.now() - cached.cachedAt.getTime();
       const ageMin = Math.max(1, Math.round(ageMs / 60_000));
@@ -695,7 +707,11 @@ export async function answer(msg: NormalizedMessage, opts: AnswerOptions = {}): 
           return {
             type: 'tool_result' as const,
             tool_use_id: block.id,
-            content: JSON.stringify(out),
+            // Fence tools that return attacker/third-party free text (token
+            // names, headlines, fetched docs) as untrusted DATA, so an injection
+            // planted in that text can't pose as an instruction. No-op for our
+            // own computed tools, so we don't pay fence tokens on every call.
+            content: fenceToolResult(block.name, JSON.stringify(out)),
           };
         } catch (e) {
           return {
@@ -708,6 +724,27 @@ export async function answer(msg: NormalizedMessage, opts: AnswerOptions = {}): 
       }),
     );
     messages.push({ role: 'user', content: toolResults });
+  }
+
+  // Output-side safety backstops, on the MODEL's answer only (before any canned
+  // fallback copy is substituted below). Two failures we never want shipped:
+  if (finalText) {
+    // 1. System-prompt exfiltration. Hard-block: a real answer never contains
+    // these signatures, so a match is a near-certain leak, swap in the safe
+    // refusal rather than ship the instructions. High precision, so this won't
+    // eat legitimate answers. Stays a real (non-failed) answer, we chose to
+    // suppress it, the turn didn't error.
+    if (scanForPromptLeak(finalText)) {
+      console.warn('[safety] prompt-leak signature in output, replaced with refusal');
+      finalText = SAFE_REFUSAL;
+    }
+    // 2. Signal language. Log-only, never rewrite a live answer on a fuzzy match
+    // (that mangles honest reads like "buyers are lifting offers"). Surfaces a
+    // prompt slip for review; the prompt itself is the primary guard.
+    const signalHits = scanForSignalLanguage(finalText);
+    if (signalHits.length) {
+      console.warn(`[safety] signal-language in output: ${signalHits.join(' | ')}`);
+    }
   }
 
   // A failed/unanswerable turn (timeout or no grounded completion), tracked for
