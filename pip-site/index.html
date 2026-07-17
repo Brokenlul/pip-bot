@@ -664,24 +664,26 @@
     // pay option for that plan until it's ready.
     // ============================================================
     var CHECKOUT = {
+      // LIVE products (Dodo live mode). Prices are set on the product itself:
+      // lite 12/mo, 120/yr · pro 19/mo, 192/yr · server-pro 29/mo, 288/yr.
       'personal-lite': {
         dodo: {
-          monthly: 'https://test.checkout.dodopayments.com/buy/pdt_0NjENaxh6qpDTP7csvHFa?quantity=1',
-          yearly:  'https://test.checkout.dodopayments.com/buy/pdt_0NjENayem4RlBFHtWqSHJ?quantity=1'
+          monthly: 'https://checkout.dodopayments.com/buy/pdt_0NjNGw4ZdTqULYiJuKA6L?quantity=1',
+          yearly:  'https://checkout.dodopayments.com/buy/pdt_0NjNGvXjce0VWUTJxE8ei?quantity=1'
         },
         loop: { monthly: '', yearly: '' }
       },
       'personal-pro': {
         dodo: {
-          monthly: 'https://test.checkout.dodopayments.com/buy/pdt_0NjENazcRvDBVo995kMVP?quantity=1',
-          yearly:  'https://test.checkout.dodopayments.com/buy/pdt_0NjENb0X7mAlEEl2m1aQP?quantity=1'
+          monthly: 'https://checkout.dodopayments.com/buy/pdt_0NjNGv3CQKSCs8rDstEUb?quantity=1',
+          yearly:  'https://checkout.dodopayments.com/buy/pdt_0NjNGuVfMpHFFTXhpOmMU?quantity=1'
         },
         loop: { monthly: '', yearly: '' }
       },
       'server-pro': {
         dodo: {
-          monthly: 'https://test.checkout.dodopayments.com/buy/pdt_0NjENb1d6bbUJOs4u7BUN?quantity=1',
-          yearly:  'https://test.checkout.dodopayments.com/buy/pdt_0NjENb2gpVpHozFa6niuA?quantity=1'
+          monthly: 'https://checkout.dodopayments.com/buy/pdt_0NjNGu2EA7HdQAOoipodi?quantity=1',
+          yearly:  'https://checkout.dodopayments.com/buy/pdt_0NjNGtEKTsVUyhwNCceOa?quantity=1'
         },
         loop: { monthly: '', yearly: '' }
       }
