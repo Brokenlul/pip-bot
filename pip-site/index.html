@@ -750,8 +750,8 @@
         features: ['Grounded, cited answers in-channel', 'Live price, funding & macro data', '25 questions / server / day'] },
       { name: 'PRO', slug: 'server-pro', monthly: 29, yearly: 24, popular: true, tagline: 'The research desk for active communities.', cta: 'Get the research desk',
         features: ['No daily ceiling to worry about', 'Live funding & OI reads', "Per-server memory that learns your community's watchlists", 'Auto-reads tickers & contracts dropped in chat'] },
-      { name: 'ELITE', monthly: 99, yearly: 82, tagline: 'For large & alpha communities.', cta: 'Talk to us',
-        features: ['Everything in Pro', 'Built for high-volume servers', 'Scheduled briefings & event alerts (CPI, FOMC)', "Custom persona in your community's voice", 'Priority support & early features'] }
+      { name: 'ELITE', custom: true, tagline: 'For large & alpha communities.', cta: 'Talk to us',
+        features: ['Full white-label — your brand, bot name & avatar', 'Everything in Pro', 'Built for high-volume servers', 'Scheduled briefings & event alerts (CPI, FOMC)', "Custom persona in your community's voice", 'Priority support & early features'] }
     ];
 
     function esc(s) {
@@ -759,11 +759,12 @@
     }
 
     function buildPlan(p, billing, audience) {
-      var isYearly = billing === 'yearly' && !p.isFree;
-      var main = p.isFree ? '$0' : (isYearly ? '$' + (p.yearly * 12) : '$' + p.monthly);
-      var suffix = isYearly ? '/yr' : '/mo';
-      var note = isYearly ? '$' + p.yearly + '/mo billed yearly' : '';
-      var ctaKind = p.isFree ? 'free' : (p.cta === 'Talk to us' ? 'contact' : 'checkout');
+      var isCustom = !!p.custom;
+      var isYearly = billing === 'yearly' && !p.isFree && !isCustom;
+      var main = isCustom ? 'Custom' : (p.isFree ? '$0' : (isYearly ? '$' + (p.yearly * 12) : '$' + p.monthly));
+      var suffix = isCustom ? '' : (isYearly ? '/yr' : '/mo');
+      var note = (isCustom || !isYearly) ? '' : '$' + p.yearly + '/mo billed yearly';
+      var ctaKind = p.isFree ? 'free' : ((isCustom || p.cta === 'Talk to us') ? 'contact' : 'checkout');
       var href = '#';
       if (ctaKind === 'free') href = audience === 'server' ? LINKS.discordInvite : LINKS.telegram;
       else if (ctaKind === 'contact') href = LINKS.community;
@@ -771,7 +772,7 @@
         name: p.name, slug: p.slug, tagline: p.tagline, features: p.features, cta: p.cta,
         popular: !!p.popular, isFree: !!p.isFree, ctaKind: ctaKind, href: href, billing: billing,
         priceMain: main, priceSuffix: suffix, priceNote: note, hasNote: !!note,
-        billingLine: isYearly ? note : 'billed monthly, cancel anytime'
+        billingLine: isCustom ? 'Custom pricing — let’s scope it together' : (isYearly ? note : 'billed monthly, cancel anytime')
       };
     }
 
