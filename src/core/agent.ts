@@ -18,6 +18,7 @@ import { CAPS } from '../beta/caps.js';
 import {
   computeCostUsd,
   logUsage,
+  logSafetyEvent,
   questionHash,
   exactCacheGet,
   exactCachePut,
@@ -736,6 +737,13 @@ export async function answer(msg: NormalizedMessage, opts: AnswerOptions = {}): 
     // suppress it, the turn didn't error.
     if (scanForPromptLeak(finalText)) {
       console.warn('[safety] prompt-leak signature in output, replaced with refusal');
+      void logSafetyEvent({
+        platform: msg.platform,
+        guildId: msg.guildId,
+        userId: msg.userId,
+        kind: 'prompt_leak',
+        questionHash: qHash,
+      }).catch(() => {});
       finalText = SAFE_REFUSAL;
     }
     // 2. Signal language. Log-only, never rewrite a live answer on a fuzzy match
@@ -744,6 +752,14 @@ export async function answer(msg: NormalizedMessage, opts: AnswerOptions = {}): 
     const signalHits = scanForSignalLanguage(finalText);
     if (signalHits.length) {
       console.warn(`[safety] signal-language in output: ${signalHits.join(' | ')}`);
+      void logSafetyEvent({
+        platform: msg.platform,
+        guildId: msg.guildId,
+        userId: msg.userId,
+        kind: 'signal_language',
+        detail: signalHits.join(' | '),
+        questionHash: qHash,
+      }).catch(() => {});
     }
   }
 

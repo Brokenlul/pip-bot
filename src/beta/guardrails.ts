@@ -92,6 +92,37 @@ export async function logUsage(row: UsageLogRow): Promise<void> {
     .throwOnError();
 }
 
+export interface SafetyEventRow {
+  platform: string;
+  guildId: string;
+  userId: string;
+  /** Which backstop fired: a hard-blocked prompt-leak, or a logged signal-language slip. */
+  kind: 'prompt_leak' | 'signal_language';
+  /** The matched snippets (signal_language) or a short note; omit for prompt_leak. */
+  detail?: string;
+  questionHash?: string;
+}
+
+/** Fire-and-forget durable record of a security backstop firing. The ephemeral
+ *  console.warn in agent.ts stays for local dev; this makes the same events
+ *  queryable from Supabase instead of lost when Railway's console log rotates.
+ *  Never throws. */
+export async function logSafetyEvent(row: SafetyEventRow): Promise<void> {
+  const db = getDb();
+  if (!db) return;
+  await db
+    .from('safety_event')
+    .insert({
+      platform: row.platform,
+      guild_id: row.guildId,
+      user_id: row.userId,
+      kind: row.kind,
+      detail: row.detail ?? null,
+      question_hash: row.questionHash ?? null,
+    })
+    .throwOnError();
+}
+
 /** Record a 👍/👎 on one of Pip's answers (one vote per user per message). */
 export async function recordFeedback(opts: {
   platform: string;
