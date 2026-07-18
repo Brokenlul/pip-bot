@@ -284,6 +284,9 @@ async function viewUserDetail(id) {
 // ---- 6. Errors & health ----------------------------------------------------
 async function viewErrors() {
   const rows = await D.loadUsage(7);
+  // Safety-backstop firings (durable channel, migration 0011). Best-effort:
+  // an env whose DB predates the table shouldn't 500 the whole errors view.
+  const safety = await D.loadSafetyEvents(7).catch(() => []);
   const failed = rows.filter((r) => r.failed);
   const failRate = rows.length ? failed.length / rows.length : 0;
   const degraded = rows.filter((r) => r.degraded).length;
@@ -308,6 +311,11 @@ async function viewErrors() {
   const recent = failed.slice(0, 40).map((r) =>
     `<tr><td class="muted" style="white-space:nowrap">${ago(r.created_at)}</td><td><span class="pill">${esc(r.platform)}</span></td><td class="mono">${shortId(r.user_id)}</td><td><div class="trunc bad" title="${esc(r.error_detail || '')}">${esc(r.error_detail || 'unknown')}</div></td></tr>`).join('');
   const kindRows = kinds.map(([k, c]) => `<tr><td class="mono">${esc(k)}</td><td>${c}</td></tr>`).join('');
+  // Safety events, mirrors the failures block: summary counts + a recent table.
+  const leakCount = safety.filter((s) => s.kind === 'prompt_leak').length;
+  const signalCount = safety.filter((s) => s.kind === 'signal_language').length;
+  const safetyRecent = safety.slice(0, 30).map((s) =>
+    `<tr><td class="muted" style="white-space:nowrap">${ago(s.created_at)}</td><td><span class="pill">${esc(s.platform)}</span></td><td class="mono">${shortId(s.user_id)}</td><td><span class="pill">${esc(s.kind)}</span></td><td><div class="trunc" title="${esc(s.detail || '')}">${esc(s.detail || '—')}</div></td></tr>`).join('');
   const body = `
     <div class="grid4">
       ${stat('Failure rate · 7d', pct(failRate), `${failed.length} / ${rows.length}`)}
@@ -325,6 +333,18 @@ async function viewErrors() {
         <tr><td>Overloaded (5xx)</td><td>${failed.filter((r) => /overloaded|:5\d\d/.test(r.error_detail || '')).length}</td></tr>
       </tbody></table>`)}
     </div>
-    ${card('Recent failures · error_detail', table(['When', 'Platform', 'User', 'Detail'], recent))}`;
+    ${card('Recent failures · error_detail', table(['When', 'Platform', 'User', 'Detail'], recent))}
+    <div class="grid2">
+      ${card('Safety backstops · 7d', `<table><tbody>
+        <tr><td>Prompt-leak blocks</td><td class="${leakCount ? 'bad' : 'ok'}"><b>${leakCount}</b></td></tr>
+        <tr><td>Signal-language slips</td><td>${signalCount}</td></tr>
+        <tr><td>Total events</td><td>${safety.length}</td></tr>
+      </tbody></table>`)}
+      ${card('What these are', `<div class="muted" style="line-height:1.5">
+        <b>Prompt-leak</b>: output matched a system-prompt signature and was hard-swapped for a safe refusal.<br>
+        <b>Signal-language</b>: answer contained imperative "buy/sell now" phrasing — logged only, never rewritten.
+      </div>`)}
+    </div>
+    ${card('Recent safety events', table(['When', 'Platform', 'User', 'Kind', 'Detail'], safetyRecent))}`;
   return R.shell({ title: 'pip · admin — errors', active: 'errors', body, updated: new Date(), refresh: true });
 }

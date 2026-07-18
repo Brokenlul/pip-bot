@@ -32,6 +32,10 @@ async function loadFeedback(days = 7) {
   const since = iso(Date.now() - days * DAY);
   return sb(`feedback?select=platform,guild_id,rater_id,rating,message_id,created_at&created_at=gte.${since}&limit=10000`);
 }
+async function loadSafetyEvents(days = 7) {
+  const since = iso(Date.now() - days * DAY);
+  return sb(`safety_event?select=created_at,platform,guild_id,user_id,kind,detail&created_at=gte.${since}&order=created_at.desc&limit=5000`);
+}
 async function loadActivity(limit = 100) {
   return sb(`conversations?select=created_at,guild_id,user_id,question,answer&order=created_at.desc&limit=${limit}`);
 }
@@ -247,6 +251,6 @@ function overviewMetrics(rows, testers, feedback, caps, founderKeys) {
 }
 
 module.exports = {
-  sb, loadUsage, loadTesters, loadFeedback, loadActivity, loadUserConversations, loadUserProfile,
+  sb, loadUsage, loadTesters, loadFeedback, loadSafetyEvents, loadActivity, loadUserConversations, loadUserProfile,
   loadPayments, classify, tierPrice, inferBilling, overviewMetrics, TIER, DAY,
 };
