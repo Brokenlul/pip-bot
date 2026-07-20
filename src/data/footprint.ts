@@ -42,13 +42,17 @@ function queueTape<T>(fn: () => Promise<T>): Promise<T> {
   return run;
 }
 
-/** Binance says slow down (429) or has banned us (418) — retrying makes it worse. */
+/**
+ * The venue says slow down (429) or has banned us (418). Retrying makes it worse.
+ * Wording deliberately avoids naming the data provider and avoids em-dashes,
+ * because these strings get echoed into replies and both are hard prompt rules.
+ */
 function guardRateLimit(status: number): void {
   if (status === 429 || status === 418) {
     abortRetry(
       status === 418
-        ? 'Binance has temporarily blocked our IP for request rate. Footprint reads are unavailable for a few minutes — try again shortly.'
-        : 'Binance is rate-limiting us right now. Try the footprint again in a moment.',
+        ? "We're hitting rate limits on live market data. Reads are paused for a few minutes, try again in a bit."
+        : "We're hitting rate limits on live market data, try again in a bit.",
     );
   }
 }
@@ -166,7 +170,9 @@ async function fetchTape(pair: string, startMs: number, endMs: number): Promise<
   ]);
   if (seedRes.status === 400 || tipRes.status === 400) {
     // A bad symbol is deterministic — retrying it just burns request weight.
-    abortRetry(`"${pair.replace(/USDT$/, '')}" isn't on Binance USDT-M futures — a footprint needs a public trade tape, which Hyperliquid-only markets don't expose.`);
+    abortRetry(
+      `"${pair.replace(/USDT$/, '')}" has no public trade tape available, so a footprint isn't possible for it. The live order book read (render_order_flow_chart) is the closest alternative.`,
+    );
   }
   guardRateLimit(seedRes.status);
   guardRateLimit(tipRes.status);
@@ -378,7 +384,7 @@ function deriveSignals(candles: FpCandle[], tick: number): FpSignal[] {
     out.push({
       kind: 'stacked_imbalance',
       price: s.low,
-      note: `${s.count} stacked ${s.side === 'ask' ? 'buy' : 'sell'} imbalances ${s.low === s.high ? `at ${fmt(s.low)}` : `${fmt(s.low)}–${fmt(s.high + tick)}`} — ${s.side === 'ask' ? 'aggressive buyers lifting through offers; support on a retest' : 'aggressive sellers hitting bids; resistance on a retest'}`,
+      note: `${s.count} stacked ${s.side === 'ask' ? 'buy' : 'sell'} imbalances ${s.low === s.high ? `at ${fmt(s.low)}` : `from ${fmt(s.low)} to ${fmt(s.high + tick)}`}: ${s.side === 'ask' ? 'aggressive buyers lifting through offers, support on a retest' : 'aggressive sellers hitting bids, resistance on a retest'}`,
     });
   }
 
@@ -397,9 +403,9 @@ function deriveSignals(candles: FpCandle[], tick: number): FpSignal[] {
     const share = (pocCell.bid + pocCell.ask) / c.volume;
     if (share < 0.2) continue; // needs to be a genuine concentration, not a flat candle
     if (pocHigh && closedLow && pocCell.ask > pocCell.bid) {
-      out.push({ kind: 'absorption', price: c.poc, note: `Buyers absorbed at ${fmt(c.poc)} — ${Math.round(share * 100)}% of the candle's volume went off at the highs on buy aggression, then price closed back at the lows. Sellers held it.` });
+      out.push({ kind: 'absorption', price: c.poc, note: `Buyers absorbed at ${fmt(c.poc)}: ${Math.round(share * 100)}% of the candle's volume went off at the highs on buy aggression, then price closed back at the lows. Sellers held it.` });
     } else if (pocLow && closedHigh && pocCell.bid > pocCell.ask) {
-      out.push({ kind: 'absorption', price: c.poc, note: `Sellers absorbed at ${fmt(c.poc)} — ${Math.round(share * 100)}% of the candle's volume went off at the lows on sell aggression, then price closed back at the highs. Buyers held it.` });
+      out.push({ kind: 'absorption', price: c.poc, note: `Sellers absorbed at ${fmt(c.poc)}: ${Math.round(share * 100)}% of the candle's volume went off at the lows on sell aggression, then price closed back at the highs. Buyers held it.` });
     }
   }
 
@@ -412,20 +418,20 @@ function deriveSignals(candles: FpCandle[], tick: number): FpSignal[] {
     const maxDelta = Math.max(...prior.map((c) => c.delta));
     const minDelta = Math.min(...prior.map((c) => c.delta));
     if (last.h >= priorHigh && last.delta < maxDelta) {
-      out.push({ kind: 'delta_divergence', price: last.h, note: `New high at ${fmt(last.h)} on weaker delta (${last.delta > 0 ? '+' : ''}${last.delta} vs ${maxDelta > 0 ? '+' : ''}${maxDelta} earlier) — the push up isn't backed by fresh aggressive buying.` });
+      out.push({ kind: 'delta_divergence', price: last.h, note: `New high at ${fmt(last.h)} on weaker delta (${last.delta > 0 ? '+' : ''}${last.delta} vs ${maxDelta > 0 ? '+' : ''}${maxDelta} earlier): the push up isn't backed by fresh aggressive buying.` });
     }
     if (last.l <= priorLow && last.delta > minDelta) {
-      out.push({ kind: 'delta_divergence', price: last.l, note: `New low at ${fmt(last.l)} on weaker negative delta (${last.delta > 0 ? '+' : ''}${last.delta} vs ${minDelta} earlier) — sellers aren't pressing the break.` });
+      out.push({ kind: 'delta_divergence', price: last.l, note: `New low at ${fmt(last.l)} on weaker negative delta (${last.delta > 0 ? '+' : ''}${last.delta} vs ${minDelta} earlier): sellers aren't pressing the break.` });
     }
   }
 
   // Unfinished business at the extremes of the most recent completed candle.
   const last = done[done.length - 1];
   if (last?.unfinished === 'high' || last?.unfinished === 'both') {
-    out.push({ kind: 'unfinished_auction', price: last.h, note: `Unfinished auction at the ${fmt(last.h)} high — two-sided volume at the extreme, so the level tends to get revisited.` });
+    out.push({ kind: 'unfinished_auction', price: last.h, note: `Unfinished auction at the ${fmt(last.h)} high: two-sided volume at the extreme, so the level tends to get revisited.` });
   }
   if (last?.unfinished === 'low' || last?.unfinished === 'both') {
-    out.push({ kind: 'unfinished_auction', price: last.l, note: `Unfinished auction at the ${fmt(last.l)} low — two-sided volume at the extreme, so the level tends to get revisited.` });
+    out.push({ kind: 'unfinished_auction', price: last.l, note: `Unfinished auction at the ${fmt(last.l)} low: two-sided volume at the extreme, so the level tends to get revisited.` });
   }
 
   // Where value is migrating across the window.
@@ -434,7 +440,7 @@ function deriveSignals(candles: FpCandle[], tick: number): FpSignal[] {
     const lastPoc = done[done.length - 1]!.poc;
     const steps = Math.round((lastPoc - firstPoc) / tick);
     if (Math.abs(steps) >= 2) {
-      out.push({ kind: 'poc_migration', price: lastPoc, note: `Value migrating ${steps > 0 ? 'up' : 'down'} — per-candle POC moved ${fmt(firstPoc)} → ${fmt(lastPoc)} over the window.` });
+      out.push({ kind: 'poc_migration', price: lastPoc, note: `Value migrating ${steps > 0 ? 'up' : 'down'}: per-candle POC moved from ${fmt(firstPoc)} to ${fmt(lastPoc)} over the window.` });
     }
   }
 
