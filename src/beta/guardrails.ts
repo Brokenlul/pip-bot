@@ -439,7 +439,13 @@ async function notifyTweetClaim(msg: NormalizedMessage, tweetUrl: string): Promi
 
 function payLine(): string {
   const url = getConfig().BETA_UPGRADE_URL;
-  return url ? `grab full access here: ${url}` : "paid access is coming soon — you'll hear about it first.";
+  if (url) return `grab full access here: ${url}`;
+  // Payments went live 2026-07-17, so the old "coming soon, you'll hear about
+  // it first" fallback is now FALSE and costs a conversion every time it fires:
+  // it tells a ready-to-pay user to sit and wait for something that exists.
+  // Reaching this branch means BETA_UPGRADE_URL is missing from the environment.
+  console.warn('[beta] BETA_UPGRADE_URL is not set, upgrade prompts are going out without a checkout link');
+  return 'paid access is live now, ask in the server for the checkout link.';
 }
 
 // ---- The gate --------------------------------------------------------------
@@ -501,7 +507,7 @@ export async function betaGate(msg: NormalizedMessage): Promise<GateDecision> {
     const key = `${day}:${userKey}`;
     if (politeRepliedToday.has(key)) return blockedSilent('non-tester repeat', msg);
     politeRepliedToday.add(key);
-    return blocked('Pip is in private beta right now. Sit tight — public access is coming soon. 🌱');
+    return blocked('Pip is in private beta right now. Sit tight, public access is coming soon. 🌱');
   }
 
   // 2. Optional server / channel restriction — only bites when the env lists
@@ -536,9 +542,9 @@ export async function betaGate(msg: NormalizedMessage): Promise<GateDecision> {
     if (tweetUrl && !tester.extension_used) {
       if (await grantTweetExtension(msg, tweetUrl)) {
         void notifyTweetClaim(msg, tweetUrl);
-        return blocked("Tweet received — you've unlocked one more free week 🌱 Enjoy! (I do check the links, so keep it up 👀)");
+        return blocked("Tweet received, you've unlocked one more free week 🌱 Enjoy! (I do check the links, so keep it up 👀)");
       }
-      return blocked("Couldn't record that just now — paste the tweet link again in a minute.");
+      return blocked("Couldn't record that just now, paste the tweet link again in a minute.");
     }
     // Reply on EVERY ping (founder decision 2026-07-15): a lapsed user who @s
     // Pip should always get the expired notice — never silence. Reactive only
@@ -547,11 +553,11 @@ export async function betaGate(msg: NormalizedMessage): Promise<GateDecision> {
     if (!tester.extension_used) {
       return blocked(
         'Your free week with Pip is up 🌱 Two ways to keep going:\n' +
-          '1. Tweet what you think of Pip, then paste the tweet link here — unlocks one more free week (one time).\n' +
+          '1. Tweet what you think of Pip, then paste the tweet link here. Unlocks one more free week (one time).\n' +
           `2. Or ${payLine()}`,
       );
     }
-    return blocked(`Your bonus week is up — thanks for testing Pip 🌱 To keep going, ${payLine()}`);
+    return blocked(`Your bonus week is up. Thanks for testing Pip 🌱 To keep going, ${payLine()}`);
   }
 
   // 3. Cooldown (in-memory) — kills spam bursts & accidental double-fires.
@@ -568,7 +574,7 @@ export async function betaGate(msg: NormalizedMessage): Promise<GateDecision> {
 
   // 5. Global kill-switch — the real protection.
   if (globalSpend >= spendCap || globalMsgs >= cfg.BETA_DAILY_GLOBAL_MSGS) {
-    return blocked("Pip's daily beta budget is spent — back at midnight UTC. This keeps the beta free for everyone 🌱");
+    return blocked("Pip's daily beta budget is spent, back at midnight UTC. This keeps the beta free for everyone 🌱");
   }
 
   // 5b. Per-server spend cap — one busy guild can't drain the global budget.
@@ -595,11 +601,11 @@ export async function betaGate(msg: NormalizedMessage): Promise<GateDecision> {
 
   if (!isFounder) {
     if (mine.length >= cfg.BETA_USER_DAILY_MSGS) {
-      return blocked("You've hit today's beta limit — resets at midnight UTC. This keeps the beta free for everyone 🌱");
+      return blocked("You've hit today's beta limit, it resets at midnight UTC. This keeps the beta free for everyone 🌱");
     }
     const mySpend = mine.reduce((s, r) => s + Number(r.cost_usd), 0);
     if (mySpend >= cfg.BETA_USER_DAILY_SPEND_USD) {
-      return blocked("You've used today's Pip budget — it resets at midnight UTC 🌱");
+      return blocked("You've used today's Pip budget, it resets at midnight UTC 🌱");
     }
   }
 
