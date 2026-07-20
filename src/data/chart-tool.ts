@@ -14,7 +14,9 @@ import {
 import { sma, ema, rsi, macd, vwap, bollinger, fvgZones, Series } from '../core/indicators.js';
 import { renderOrderFlowChartPng, renderOiCvdChartPng } from '../core/orderflow-chart.js';
 import { renderProfileChartPng } from '../core/profile-chart.js';
+import { renderFootprintChartPng } from '../core/footprint-chart.js';
 import { orderFlowChartData, oiCvdChartData } from './order-flow.js';
+import { footprintData, FP_INTERVALS } from './footprint.js';
 
 /**
  * render_price_chart, draws a Pip-branded candlestick chart (Hyperliquid
@@ -522,6 +524,68 @@ export const oiCvdChartTool: Tool<OiCvdInput, OiCvdOutput> = {
     }, `oi-cvd:${input.coin}:${input.interval ?? '1h'}`);
   },
   citation: (_, out) => ({ label: `OI + CVD (${out.coin} ${out.interval})`, url: out.source_url }),
+};
+
+// ---- render_footprint -------------------------------------------------------
+// The cluster grid: bid x ask per price level per candle, imbalance-shaded.
+// Capped at 14 columns — past that the cells are too small to read in Discord,
+// and an unreadable footprint is worse than none.
+
+const FP_MAX_COLUMNS = 14;
+
+const FootprintInputSchema = z.object({
+  coin: z.string().min(1).describe('Ticker, e.g. "BTC", "ETH", "SOL". No $ prefix.'),
+  interval: z.enum(FP_INTERVALS).optional().describe('Footprint candle size (default "1m").'),
+  candles: z.number().int().min(4).max(FP_MAX_COLUMNS).optional().describe(`Candles to draw, 4-${FP_MAX_COLUMNS} (default 10).`),
+});
+type FootprintInput = z.infer<typeof FootprintInputSchema>;
+interface FootprintOutput {
+  chart_attached: boolean;
+  coin: string;
+  interval: string;
+  window_minutes: number;
+  cumulative_delta: number;
+  signals: string[];
+  source_url: string;
+}
+
+export const footprintChartTool: Tool<FootprintInput, FootprintOutput> = {
+  name: 'render_footprint',
+  description:
+    'Draw a branded FOOTPRINT (cluster) chart and ATTACH it: one column per candle, one row per price level, each cell showing bid volume x ask volume off the live tape, with ≥3x diagonal imbalances shaded, stacked imbalances bolded, the candle POC marked, and a per-candle delta row underneath. Use when a trader asks to SEE a footprint / cluster chart / bid-ask ladder / order-flow imbalances on the chart. Binance USDT-M futures only. Call the `footprint` tool alongside it for the numeric read and ALWAYS state the signals it returns — the grid alone is dense and the trader wants your interpretation of it, not just the picture.',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      coin: { type: 'string', description: 'Ticker, e.g. "BTC". No $ prefix.' },
+      interval: { type: 'string', enum: [...FP_INTERVALS], description: 'Footprint candle size; default "1m".' },
+      candles: { type: 'number', description: `Candles to draw, 4-${FP_MAX_COLUMNS}; default 10.` },
+    },
+    required: ['coin'],
+  },
+  validate: zValidator(FootprintInputSchema),
+  execute: async (input, ctx) => {
+    return withRetry(async () => {
+      const interval = input.interval ?? '1m';
+      const want = Math.min(input.candles ?? 10, FP_MAX_COLUMNS);
+      // footprintData already narrows to `want` (and recomputes delta/signals
+      // over the slice), so the grid is render-ready.
+      const d = await footprintData(input.coin, interval, want);
+      const png = renderFootprintChartPng(d);
+      const filename = `pip-footprint-${d.coin.toLowerCase()}-${interval}.png`;
+      const attached = ctx.attachImage?.(filename, png) ?? false;
+      if (!attached) throw new Error('Chart limit for this reply reached, refer to the chart already attached.');
+      return {
+        chart_attached: true,
+        coin: d.coin,
+        interval,
+        window_minutes: d.windowMinutes,
+        cumulative_delta: d.cumDelta,
+        signals: d.signals.map((s) => s.note),
+        source_url: d.source_url,
+      };
+    }, `footprint-chart:${input.coin}:${input.interval ?? '1m'}`);
+  },
+  citation: (_, out) => ({ label: `Footprint (${out.coin} ${out.interval})`, url: out.source_url }),
 };
 
 // ---- indicator_snapshot -----------------------------------------------------
