@@ -797,10 +797,15 @@
       var footer = plan.ctaKind === 'free' ? 'Free for 7 days · no card'
         : plan.ctaKind === 'contact' ? "Custom terms, let's talk"
         : 'No commitment · cancel anytime';
+      // data-ev-plan is read by assets/track.js so a funnel row knows which
+      // plan card was clicked. Kept on the CTA (not the card) because that's
+      // the element the click listener already resolves to.
+      var evPlan = ' data-ev-plan="' + esc(plan.slug || (plan.isFree ? 'free' : plan.name)) + '"'
+        + ' data-ev-billing="' + esc(plan.billing || '') + '"';
       var ctaAttr = plan.ctaKind === 'checkout'
-        ? (' href="#" data-plan-idx="' + idx + '"')
+        ? (' href="#" data-plan-idx="' + idx + '"' + evPlan)
         : plan.ctaKind === 'free'
-        ? (' href="#" data-trial="1"')
+        ? (' href="#" data-trial="1"' + evPlan)
         : (' href="' + esc(plan.href) + '"' + (plan.href.indexOf('http') === 0 ? ' target="_blank" rel="noopener"' : ''));
       return (
         '<div class="' + cls + '">' + badge +
@@ -1038,5 +1043,7 @@
   })();
 </script>
 
+
+<script defer src="/assets/track.js"></script>
 </body>
 </html>

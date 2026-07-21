@@ -36,6 +36,10 @@ async function loadSafetyEvents(days = 7) {
   const since = iso(Date.now() - days * DAY);
   return sb(`safety_event?select=created_at,platform,guild_id,user_id,kind,detail&created_at=gte.${since}&order=created_at.desc&limit=5000`);
 }
+async function loadSiteEvents(days = 7) {
+  const since = iso(Date.now() - days * DAY);
+  return sb(`site_events?select=created_at,visitor_id,session_id,event,path,target,referrer_host,utm_source,utm_campaign,country,device&created_at=gte.${since}&order=created_at.desc&limit=50000`);
+}
 async function loadActivity(limit = 100) {
   return sb(`conversations?select=created_at,guild_id,user_id,question,answer&order=created_at.desc&limit=${limit}`);
 }
@@ -251,6 +255,6 @@ function overviewMetrics(rows, testers, feedback, caps, founderKeys) {
 }
 
 module.exports = {
-  sb, loadUsage, loadTesters, loadFeedback, loadSafetyEvents, loadActivity, loadUserConversations, loadUserProfile,
+  sb, loadUsage, loadTesters, loadFeedback, loadSafetyEvents, loadSiteEvents, loadActivity, loadUserConversations, loadUserProfile,
   loadPayments, classify, tierPrice, inferBilling, overviewMetrics, TIER, DAY,
 };

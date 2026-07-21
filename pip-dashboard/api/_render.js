@@ -81,6 +81,7 @@ const p95 = (a) => { if (!a.length) return null; const s = [...a].sort((x, y) =>
 // ---- shell -----------------------------------------------------------------
 const NAV = [
   ['overview', 'Overview'],
+  ['funnel', 'Funnel'],
   ['payments', 'Payments'],
   ['trials', 'Trials'],
   ['activity', 'Activity'],

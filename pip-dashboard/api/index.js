@@ -52,6 +52,7 @@ module.exports = async function handler(req, res) {
   try {
     switch (view) {
       case 'overview': return R.send(res, 200, await viewOverview());
+      case 'funnel': return R.send(res, 200, await viewFunnel());
       case 'payments': return R.send(res, 200, await viewPayments());
       case 'trials': return R.send(res, 200, await viewTrials());
       case 'activity': return R.send(res, 200, await viewActivity());
@@ -206,6 +207,144 @@ async function viewTrials() {
     ${card('Lapsed & unpaid · re-engage or let go', table(['User', 'Platform', 'Ended', 'Extension'], lapsedRows))}`;
   return R.shell({ title: 'pip · admin — trials', active: 'trials', body, updated: new Date() });
 }
+
+// ---- 3b. Funnel (website -> bot) -------------------------------------------
+// Answers the launch-day question: are people arriving, and do any of them go
+// on to actually use Pip? The website half comes from site_events (first-party,
+// see db/migrations/0012_site_events.sql); the bot half from the tables we
+// already had. The two halves are counted over the same window and shown as
+// one drop-off chain.
+//
+// Honest caveat, worth remembering when reading this page: a website visitor is
+// anonymous, so "clicked add-bot" and "started using Pip" are matched at the
+// COHORT level (same 7-day window), not per person. The percentages are
+// directional, not a per-user join.
+async function viewFunnel() {
+  const days = 7;
+  const [events, testers, usage] = await Promise.all([
+    D.loadSiteEvents(days), D.loadTesters(), D.loadUsage(days),
+  ]);
+  const since = Date.now() - days * D.DAY;
+
+  const views = events.filter((e) => e.event === 'pageview');
+  const uniq = (rows, key) => new Set(rows.map((r) => r[key])).size;
+  const visitors = uniq(views, 'visitor_id');
+  const sessions = uniq(views, 'session_id');
+
+  const clicks = events.filter((e) => e.event === 'click');
+  const clicksOf = (name) => uniq(clicks.filter((c) => c.target === name), 'visitor_id');
+  const addBot = clicksOf('discord_add_bot');
+  const community = clicksOf('discord_community');
+  const telegram = clicksOf('telegram_bot');
+  const reachedBot = addBot + community + telegram;
+
+  const checkoutStart = uniq(events.filter((e) => e.event === 'checkout_start'), 'visitor_id');
+  const checkoutSubmit = uniq(events.filter((e) => e.event === 'checkout_submit'), 'visitor_id');
+
+  // Bot half. Every step here is scoped to the people who ENROLLED in this
+  // window, otherwise the rates compare a 7-day cohort against all-time actives
+  // and you get percentages over 100.
+  const fresh = testers.filter((t) => new Date(t.invited_at).getTime() >= since);
+  const freshIds = new Set(fresh.map((t) => t.platform_id));
+  const newTesters = fresh.length;
+  // Enrolment IS the first message (autoEnroll fires on first touch), so
+  // "enrolled -> sent a message" would always be 100% and tell us nothing.
+  // The honest second step is whether they ever came back on another day.
+  const daysByUser = new Map();
+  for (const u of usage) {
+    const id = String(u.user_id);
+    if (!freshIds.has(id)) continue;
+    if (!daysByUser.has(id)) daysByUser.set(id, new Set());
+    daysByUser.get(id).add(dayKeyOf(u.created_at));
+  }
+  const returned = [...daysByUser.values()].filter((s) => s.size >= 2).length;
+  const newPaid = fresh.filter((t) => t.subscription_provider).length;
+  // Everyone active in the window regardless of when they joined — headline
+  // number, deliberately not used as a funnel denominator.
+  const activeUsers = uniq(usage, 'user_id');
+
+  const rate = (n, d) => (d ? pct(n / d) : '—');
+  const step = (label, n, base, note) =>
+    `<tr><td>${esc(label)}</td><td class="big" style="font-size:20px">${n}</td><td class="mono">${rate(n, base)}</td><td class="muted">${note || ''}</td></tr>`;
+
+  const funnelRows = [
+    step('Visited the site', visitors, visitors, `${views.length} pageviews · ${sessions} sessions`),
+    step('Clicked through to Pip', reachedBot, visitors, `add-bot ${addBot} · community ${community} · telegram ${telegram}`),
+    step('Opened checkout', checkoutStart, visitors, 'clicked a pricing CTA'),
+    step('Reached payment', checkoutSubmit, checkoutStart, 'picked card or crypto'),
+  ].join('');
+
+  const botRows = [
+    step('Started using Pip', newTesters, reachedBot || newTesters, 'first message = enrolment'),
+    step('Came back another day', returned, newTesters, 'active on 2+ distinct days'),
+    step('Paid', newPaid, newTesters, 'of the people who started this window'),
+  ].join('');
+
+  // Where they came from. referrer_host is the host only, never a full URL.
+  const tally = (rows, key) => {
+    const m = new Map();
+    for (const r of rows) {
+      const k = r[key] || (key === 'referrer_host' ? 'direct' : 'none');
+      if (!m.has(k)) m.set(k, new Set());
+      m.get(k).add(r.visitor_id);
+    }
+    return [...m.entries()].map(([k, set]) => [k, set.size]).sort((a, b) => b[1] - a[1]).slice(0, 12);
+  };
+  const refRows = tally(views, 'referrer_host').map(([k, n]) =>
+    `<tr><td class="mono">${esc(k)}</td><td>${n}</td><td class="mono">${rate(n, visitors)}</td></tr>`).join('');
+  const utmRows = tally(views.filter((v) => v.utm_source), 'utm_source').map(([k, n]) =>
+    `<tr><td class="mono">${esc(k)}</td><td>${n}</td><td class="mono">${rate(n, visitors)}</td></tr>`).join('');
+  const pageRows = tally(views, 'path').map(([k, n]) =>
+    `<tr><td class="mono">${esc(k)}</td><td>${n}</td><td class="mono">${rate(n, visitors)}</td></tr>`).join('');
+  const planRows = tally(events.filter((e) => e.event === 'checkout_start'), 'target').map(([k, n]) =>
+    `<tr><td class="mono">${esc(k)}</td><td>${n}</td><td class="mono">${rate(n, checkoutStart)}</td></tr>`).join('');
+  const countryRows = tally(views, 'country').map(([k, n]) =>
+    `<tr><td class="mono">${esc(k)}</td><td>${n}</td><td class="mono">${rate(n, visitors)}</td></tr>`).join('');
+
+  // Daily visitors, so launch day is legible at a glance.
+  const byDay = new Map();
+  for (const v of views) {
+    const d = dayKeyOf(v.created_at);
+    if (!byDay.has(d)) byDay.set(d, new Set());
+    byDay.get(d).add(v.visitor_id);
+  }
+  const dayList = [...byDay.entries()].map(([d, s]) => [d, s.size]).sort((a, b) => a[0] < b[0] ? -1 : 1);
+  const peak = Math.max(1, ...dayList.map(([, n]) => n));
+  const chart = dayList.length
+    ? `<div class="chart">${dayList.map(([d, n]) =>
+        `<div class="col"><span class="tick">${n}</span><div class="bar" style="height:${Math.round((n / peak) * 100)}%"></div><span class="tick">${esc(d.slice(5))}</span></div>`).join('')}</div>`
+    : '<p class="muted">No pageviews recorded yet.</p>';
+
+  const mobile = uniq(views.filter((v) => v.device === 'mobile'), 'visitor_id');
+
+  const empty = !events.length
+    ? `<div class="card"><p class="bad">No site events yet.</p><p class="muted">If the site is live, check that db/migrations/0012_site_events.sql has been applied and that SUPABASE_URL + SUPABASE_SECRET_KEY are set on the <strong>pip-site</strong> Vercel project. Note the tracker honours Do Not Track, so a DNT browser records nothing by design.</p></div>`
+    : '';
+
+  const body = `
+    ${empty}
+    <div class="grid4">
+      ${stat('Visitors · 7d', String(visitors), `${views.length} pageviews`)}
+      ${stat('Clicked to Pip', String(reachedBot), rate(reachedBot, visitors) + ' of visitors')}
+      ${stat('Messaged Pip', String(activeUsers), 'distinct users in usage_log')}
+      ${stat('On mobile', visitors ? pct(mobile / visitors) : '—', `${mobile} visitors`)}
+    </div>
+    ${card('Website funnel · unique visitors, last 7 days', table(['Step', 'People', 'Rate', 'Detail'], funnelRows))}
+    ${card('Bot funnel · cohort-level, NOT matched per person to the rows above', table(['Step', 'People', 'Rate', 'Detail'], botRows))}
+    ${card('Daily visitors', chart)}
+    <div class="grid2">
+      ${card('Where they came from', table(['Referrer', 'Visitors', 'Share'], refRows))}
+      ${card('Campaigns (utm_source)', table(['Source', 'Visitors', 'Share'], utmRows))}
+    </div>
+    <div class="grid2">
+      ${card('Top pages', table(['Path', 'Visitors', 'Share'], pageRows))}
+      ${card('Countries', table(['Country', 'Visitors', 'Share'], countryRows))}
+    </div>
+    ${card('Which plan CTA got clicked', table(['Plan', 'Visitors', 'Share of checkout opens'], planRows))}`;
+  return R.shell({ title: 'pip · admin — funnel', active: 'funnel', body, updated: new Date(), refresh: true });
+}
+
+const dayKeyOf = (ts) => new Date(ts).toISOString().slice(0, 10);
 
 // ---- 4. Activity feed ------------------------------------------------------
 async function viewActivity() {
