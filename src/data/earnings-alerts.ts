@@ -169,6 +169,7 @@ export const setEarningsAlertTool: Tool<SetInput, SetOutput> = {
     // backstop against a genuine race.
     const fields = {
       kind: 'earnings' as const,
+      channel_id: ctx.channelId ?? null,
       notify_at: sched.notify_at.toISOString(),
       earnings_date: sched.earnings_date,
       earnings_when: sched.earnings_when,

@@ -27,7 +27,7 @@ import {
 } from './platform.js';
 import { betaGate, setFounderNotifier, recordFeedback, type GateDecision } from '../beta/guardrails.js';
 import { fmtUtcHm } from '../core/util.js';
-import { registerPusher } from '../core/push.js';
+import { registerPusher, registerChannelPusher } from '../core/push.js';
 import { markGuildInstalled, markGuildRemoved } from '../memory/store.js';
 import { recordCommunityJoin } from '../memory/attribution.js';
 import { registerGuildGreeter } from '../core/guild-greeter.js';
@@ -130,6 +130,9 @@ export class DiscordAdapter implements PlatformAdapter {
     );
     // Price-alert pushes (src/core/alert-poller.ts) route through the same DM path.
     registerPusher('discord', (userId, text) => this.dmUser(userId, text));
+    // Fallback when the DM above fails (DMs closed, blocked the bot) — tag the
+    // user in the channel the alert was set from instead of failing silently.
+    registerChannelPusher('discord', (channelId, userId, text) => this.sendToChannel(channelId, userId, text));
     // Deferred server introductions (src/core/guild-greeter.ts) post through us.
     registerGuildGreeter((guildId) => this.greetGuild(guildId));
 
@@ -391,6 +394,15 @@ export class DiscordAdapter implements PlatformAdapter {
     if (!client) throw new Error('Discord client not started');
     const user = await client.users.fetch(userId);
     await user.send(text);
+  }
+
+  /** DM-fallback: tag the user in the channel the alert was originally set from. */
+  private async sendToChannel(channelId: string, userId: string, text: string): Promise<void> {
+    const client = this.client;
+    if (!client) throw new Error('Discord client not started');
+    const ch = await client.channels.fetch(channelId);
+    if (!ch || ch.type !== ChannelType.GuildText) throw new Error(`channel ${channelId} is not a sendable text channel`);
+    await ch.send({ content: `<@${userId}> ${text}`, allowedMentions: { users: [userId] } });
   }
 
   /** Map a gate decision to the agent's per-request feature budget. */

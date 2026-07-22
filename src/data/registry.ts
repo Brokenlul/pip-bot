@@ -4,6 +4,8 @@ export interface ToolContext {
   platform: string;
   guildId: string;
   userId: string;
+  /** Channel/chat the request came from, when the adapter has one. Alerts persist this so a failed DM push can fall back to tagging the user in the same chat instead of failing silently. */
+  channelId?: string;
   /**
    * Attach a rendered image (PNG) to the outgoing reply — used by chart tools.
    * Returns false when the per-reply attachment budget is spent.

@@ -476,6 +476,7 @@ export async function answer(msg: NormalizedMessage, opts: AnswerOptions = {}): 
     platform: msg.platform,
     guildId: msg.guildId,
     userId: msg.userId,
+    channelId: msg.channelId,
     attachImage: (filename, png) => {
       if (attachments.length >= 2) return false;
       attachments.push({ filename, mediaType: 'image/png', data: png });

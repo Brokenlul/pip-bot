@@ -1,6 +1,6 @@
 import { getDb } from '../memory/db.js';
 import { fundingRateTool } from '../data/hyperliquid.js';
-import { pushMessage } from './push.js';
+import { pushMessage, pushToChannel } from './push.js';
 import { resolveEarningsSchedule, reportInstant } from '../data/earnings-alerts.js';
 import type { ToolContext } from '../data/registry.js';
 
@@ -18,6 +18,7 @@ interface AlertRow {
   id: number;
   platform: string;
   user_id: string;
+  channel_id: string | null;
   symbol: string;
   direction: 'above' | 'below';
   target_price: number;
@@ -29,6 +30,7 @@ interface EarningsAlertRow {
   id: number;
   platform: string;
   user_id: string;
+  channel_id: string | null;
   symbol: string;
   note: string | null;
   notify_at: string;
@@ -37,12 +39,23 @@ interface EarningsAlertRow {
   lead_minutes: number | null;
 }
 
+/**
+ * DM first; if that fails (DMs closed, blocked the bot) and we know which
+ * channel the alert was set from, tag the user there instead of the alert
+ * just silently retrying the same dead DM forever.
+ */
+async function deliver(platform: string, userId: string, channelId: string | null, text: string): Promise<boolean> {
+  if (await pushMessage(platform, userId, text)) return true;
+  if (!channelId) return false;
+  return pushToChannel(platform, channelId, userId, text);
+}
+
 async function fetchActiveAlerts(): Promise<AlertRow[]> {
   const db = getDb();
   if (!db) return [];
   const { data, error } = await db
     .from('price_alerts')
-    .select('id, platform, user_id, symbol, direction, target_price, note, last_price')
+    .select('id, platform, user_id, channel_id, symbol, direction, target_price, note, last_price')
     .eq('active', true)
     .eq('kind', 'price');
   if (error) {
@@ -58,7 +71,7 @@ async function fetchDueEarningsAlerts(): Promise<EarningsAlertRow[]> {
   if (!db) return [];
   const { data, error } = await db
     .from('price_alerts')
-    .select('id, platform, user_id, symbol, note, notify_at, earnings_date, earnings_when, lead_minutes')
+    .select('id, platform, user_id, channel_id, symbol, note, notify_at, earnings_date, earnings_when, lead_minutes')
     .eq('active', true)
     .eq('kind', 'earnings')
     .lte('notify_at', new Date().toISOString());
@@ -154,7 +167,7 @@ async function pollEarningsOnce(): Promise<void> {
     } catch (e) {
       console.warn(`[alerts] earnings re-verify failed for ${row.symbol}: ${(e as Error).message}`);
     }
-    const sent = await pushMessage(row.platform, row.user_id, earningsPushText(row));
+    const sent = await deliver(row.platform, row.user_id, row.channel_id, earningsPushText(row));
     if (sent) await markTriggered(row.id);
   }
 }
@@ -183,12 +196,12 @@ async function pollOnce(): Promise<void> {
       }
       for (const alert of rows) {
         if (crossed(alert, price)) {
-          const sent = await pushMessage(alert.platform, alert.user_id, pushText(alert, price));
-          // On a failed send (adapter down, user blocked the bot) leave both
-          // active and last_price alone: last_price stays on the un-crossed side
-          // of the level, so the next poll still reads as a cross and retries.
-          // Refreshing it here would move it past the target and the alert could
-          // never fire again.
+          const sent = await deliver(alert.platform, alert.user_id, alert.channel_id, pushText(alert, price));
+          // On total failure (DM AND channel fallback both failed, or neither
+          // available) leave both active and last_price alone: last_price stays
+          // on the un-crossed side of the level, so the next poll still reads as
+          // a cross and retries. Refreshing it here would move it past the
+          // target and the alert could never fire again.
           if (sent) await markTriggered(alert.id);
         } else {
           await updateLastPrice(alert.id, price);

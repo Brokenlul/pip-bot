@@ -63,6 +63,7 @@ export const setPriceAlertTool: Tool<SetInput, SetOutput> = {
       .insert({
         platform: ctx.platform,
         guild_id: ctx.guildId,
+        channel_id: ctx.channelId ?? null,
         user_id: ctx.userId,
         symbol: coin,
         direction,
