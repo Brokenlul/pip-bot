@@ -1,7 +1,7 @@
 import { getDb } from '../memory/db.js';
 import { fundingRateTool } from '../data/hyperliquid.js';
 import { pushMessage } from './push.js';
-import { resolveEarningsSchedule } from '../data/earnings-alerts.js';
+import { resolveEarningsSchedule, reportInstant } from '../data/earnings-alerts.js';
 import type { ToolContext } from '../data/registry.js';
 
 /**
@@ -99,20 +99,25 @@ function pushText(alert: AlertRow, price: number): string {
   return `🔔 ${alert.symbol} just ${verb} $${alert.target_price.toLocaleString()} (now $${price.toLocaleString()})${note}\n\nNot financial advice.`;
 }
 
+/**
+ * Time to the print, measured against the actual report instant rather than the
+ * configured lead. Using lead_minutes would be a lie whenever the alert fires
+ * late (bot asleep, alert set inside the lead window) — it would still cheerfully
+ * say "in about 1h" for something reporting in ten minutes, or already out.
+ */
 function earningsPushText(row: EarningsAlertRow): string {
-  const mins = row.lead_minutes ?? 60;
-  const lead =
-    mins >= 1440
-      ? `${Math.round(mins / 1440)}d`
-      : mins >= 60
-        ? `${Math.round(mins / 60)}h`
-        : `${mins}m`;
+  const mins = Math.round((reportInstant(row.earnings_date, row.earnings_when).getTime() - Date.now()) / 60_000);
   const when = row.earnings_when ? ` (${row.earnings_when})` : '';
   const note = row.note ? `\n\nYou wanted to watch: ${row.note}` : '';
-  return (
-    `🔔 ${row.symbol} reports earnings in about ${lead} — ${row.earnings_date}${when}.` +
-    `${note}\n\nAsk me for the setup and I'll pull the consensus and the recent beat/miss record.\n\nNot financial advice.`
-  );
+  const lede =
+    mins <= 0
+      ? `🔔 ${row.symbol} is reporting right about now — ${row.earnings_date}${when}. Results should hit the wire any moment.`
+      : mins < 60
+        ? `🔔 ${row.symbol} reports in about ${mins}m — ${row.earnings_date}${when}.`
+        : mins < 1440
+          ? `🔔 ${row.symbol} reports in about ${Math.round(mins / 60)}h — ${row.earnings_date}${when}.`
+          : `🔔 ${row.symbol} reports in about ${Math.round(mins / 1440)}d — ${row.earnings_date}${when}.`;
+  return `${lede}${note}\n\nAsk me for the setup and I'll pull the consensus and the recent beat/miss record.\n\nNot financial advice.`;
 }
 
 /**

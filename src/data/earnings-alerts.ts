@@ -51,7 +51,7 @@ function newYorkToUtc(day: string, hour: number, minute: number): Date {
  *  - before open  → ~07:00, typical pre-market release, well before the 09:30 open
  *  - unknown      → assume after close, much the more common slot for large caps
  */
-function reportInstant(day: string, when: string | null): Date {
+export function reportInstant(day: string, when: string | null): Date {
   const beforeOpen = (when ?? '').toLowerCase().includes('before');
   return beforeOpen ? newYorkToUtc(day, 7, 0) : newYorkToUtc(day, 16, 5);
 }
@@ -95,15 +95,30 @@ const SetSchema = z.object({
 });
 type SetInput = z.infer<typeof SetSchema>;
 
+/**
+ * 'scheduled'        — normal case, alert is queued for later.
+ * 'imminent'         — the print is still AHEAD but closer than the requested
+ *                      lead, so the alert fires on the next poll (~45s).
+ * 'already_reported' — the published date is in the past. Nothing is set,
+ *                      because an alert for it could only ever be wrong.
+ *
+ * Keeping 'imminent' and 'already_reported' distinct is the whole point: an
+ * earlier version collapsed them by testing the NOTIFY time instead of the
+ * REPORT time, so a 60-minute alert set 49 minutes before the bell reported
+ * the print as already over. Never infer "it happened" from "the lead elapsed".
+ */
+type AlertStatus = 'scheduled' | 'imminent' | 'already_reported';
+
 interface SetOutput {
-  id: number;
+  id: number | null;
   symbol: string;
+  status: AlertStatus;
   earnings_date: string;
   earnings_when: string | null;
   report_at_utc: string;
-  notify_at_utc: string;
+  notify_at_utc: string | null;
   lead_minutes: number;
-  already_passed: boolean;
+  minutes_until_report: number;
 }
 
 export const setEarningsAlertTool: Tool<SetInput, SetOutput> = {
@@ -126,6 +141,26 @@ export const setEarningsAlertTool: Tool<SetInput, SetOutput> = {
     const symbol = input.symbol.trim().toUpperCase().replace(/^\$/, '');
     const lead = input.lead_minutes ?? 60;
     const sched = await resolveEarningsSchedule(symbol, lead, ctx);
+    const now = Date.now();
+    const minutesUntilReport = Math.round((sched.report_at.getTime() - now) / 60_000);
+
+    // The provider keeps serving the date that just passed for a day or two
+    // after a print, before rolling to next quarter. Setting an alert on that
+    // stale date would push a "reports soon" for something already out, so
+    // hand the state back and let Pip say so instead.
+    if (sched.report_at.getTime() <= now) {
+      return {
+        id: null,
+        symbol,
+        status: 'already_reported',
+        earnings_date: sched.earnings_date,
+        earnings_when: sched.earnings_when,
+        report_at_utc: sched.report_at.toISOString(),
+        notify_at_utc: null,
+        lead_minutes: lead,
+        minutes_until_report: minutesUntilReport,
+      };
+    }
 
     // Re-asking about the same symbol should MOVE the existing alert, not stack
     // a second push for one print. The uniqueness rule is partial (active
@@ -171,14 +206,15 @@ export const setEarningsAlertTool: Tool<SetInput, SetOutput> = {
     return {
       id,
       symbol,
+      // The report is still ahead of us here — the only question is whether
+      // there's enough runway left for the lead the user asked for.
+      status: sched.notify_at.getTime() <= now ? 'imminent' : 'scheduled',
       earnings_date: sched.earnings_date,
       earnings_when: sched.earnings_when,
       report_at_utc: sched.report_at.toISOString(),
       notify_at_utc: sched.notify_at.toISOString(),
       lead_minutes: lead,
-      // Surfaced so Pip says "that print is already past" rather than
-      // cheerfully confirming an alert that can never fire.
-      already_passed: sched.notify_at.getTime() <= Date.now(),
+      minutes_until_report: minutesUntilReport,
     };
   },
   citation: () => ({ label: 'Pip earnings alert' }),
