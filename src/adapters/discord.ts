@@ -133,6 +133,30 @@ export class DiscordAdapter implements PlatformAdapter {
     // Deferred server introductions (src/core/guild-greeter.ts) post through us.
     registerGuildGreeter((guildId) => this.greetGuild(guildId));
 
+    const token = getConfig().DISCORD_TOKEN;
+    if (!token) throw new Error('DISCORD_TOKEN is not set — cannot start the Discord adapter.');
+
+    // GuildMembers is PRIVILEGED. If "Server Members Intent" is off in the dev
+    // portal, Discord does not merely withhold the events — it refuses the
+    // gateway connection outright with "Used disallowed intents", which takes
+    // the entire bot down. That is far too much to lose for one optional
+    // feature, so try with it and fall back to a client without it.
+    // Self-healing: flipping the portal toggle makes the next boot keep it.
+    try {
+      await this.connect(token, true);
+    } catch (e) {
+      if (!/disallowed intents/i.test(String((e as Error).message))) throw e;
+      console.warn(
+        '[discord] "Server Members Intent" is OFF in the dev portal, so community join ' +
+          'welcomes and lead capture are DISABLED. Everything else runs normally. ' +
+          'Enable it under Bot → Privileged Gateway Intents and redeploy to turn them on.',
+      );
+      await this.connect(token, false);
+    }
+  }
+
+  /** Build, wire, and log in a client. `withMembers` adds the privileged intent. */
+  private async connect(token: string, withMembers: boolean): Promise<void> {
     const client = new Client({
       intents: [
         GatewayIntentBits.Guilds,
@@ -142,10 +166,9 @@ export class DiscordAdapter implements PlatformAdapter {
         GatewayIntentBits.MessageContent,
         // 👍/👎 feedback on Pip's answers (the pilot Quality metric).
         GatewayIntentBits.GuildMessageReactions,
-        // Privileged: enable "Server Members Intent" in the Dev Portal too, or
-        // GuildMemberAdd never fires and community joiners are never welcomed.
-        GatewayIntentBits.GuildMembers,
         GatewayIntentBits.DirectMessageReactions,
+        // Privileged, and optional — see the fallback in start().
+        ...(withMembers ? [GatewayIntentBits.GuildMembers] : []),
       ],
       // Partials so DM messages AND reactions on uncached messages still fire.
       partials: [Partials.Channel, Partials.Message, Partials.Reaction, Partials.User],
@@ -195,9 +218,14 @@ export class DiscordAdapter implements PlatformAdapter {
     client.on(Events.Error, (e) => console.error('[discord] client error:', e));
     client.on(Events.Warn, (w) => console.warn('[discord] warn:', w));
 
-    const token = getConfig().DISCORD_TOKEN;
-    if (!token) throw new Error('DISCORD_TOKEN is not set — cannot start the Discord adapter.');
-    await client.login(token);
+    try {
+      await client.login(token);
+    } catch (e) {
+      // Leave no half-connected client behind for the fallback attempt to trip on.
+      this.client = null;
+      await client.destroy().catch(() => {});
+      throw e;
+    }
   }
 
   async stop(): Promise<void> {
