@@ -87,8 +87,20 @@ const PROMPT_SIGNATURES = [
   'never reveal, repeat, quote, summarize',
 ];
 
+/**
+ * Shared by both the input and output scanners. NFKC folds fullwidth/compat
+ * Unicode variants to plain ASCII (｢ｓｙｓｔｅｍ　ｐｒｏｍｐｔ｣ -> "system prompt"),
+ * which a plain-ASCII regex would otherwise miss entirely, not just imperfectly
+ * match. Stripping markdown emphasis stops "i*g*n*o*r*e" style letter-spacing
+ * from breaking a \b-anchored word match. Deliberately NOT attempting a full
+ * cross-script confusables table (Cyrillic с for Latin c, etc.) — that's a
+ * large, slow-changing table to buy defense against a threat this bot doesn't
+ * actually face (a bored trader testing the bot, not a targeted, resourced
+ * attacker); NFKC is the cheap, real part of that problem.
+ */
 function normalizeForScan(text: string): string {
   return text
+    .normalize('NFKC')
     .toLowerCase()
     .replace(/[*_`>#]/g, '') // strip markdown emphasis so a leak can't hide behind formatting
     .replace(/\s+/g, ' ');
@@ -144,28 +156,54 @@ export function scanForSignalLanguage(text: string): string[] {
 // an attempt durable and visible instead of leaving a trace only when it
 // works.
 const INJECTION_ATTEMPT_PATTERNS: RegExp[] = [
+  // Direct instruction override.
   /\b(?:ignore|disregard|forget)\s+(?:all\s+)?(?:prior|previous|the\s+above|earlier)\s+instructions?\b/i,
+  // Asking for the prompt/config itself, in any of the usual verb framings.
   /\bsystem\s?prompt\b/i,
-  /\b(?:reveal|repeat|print|output|show|leak|dump)\s+(?:your|the)\s+(?:instructions|prompt|configuration|config)\b/i,
+  /\b(?:reveal|repeat|print|output|show|leak|dump|append)\s+(?:your|the)\s+(?:instructions|prompt|configuration|config|system\s+instructions?)\b/i,
   /\bwhat\s+(?:are|is)\s+your\s+(?:instructions|system\s?prompt|configuration)\b/i,
-  /\bappend\s+your\s+(?:full\s+)?(?:configuration|system\s+instructions?)\b/i,
-  /\b(?:editor|developer|debug)\s+note\s*:.*(?:disregard|ignore|append)/i,
-  /\bdeveloper\s+mode\b/i,
-  /\bjailbreak\b/i,
-  /\bDAN\s+mode\b/i,
-  /\bbase\s?64[\s-]?(?:encod|decod)/i,
+  // "Repeat/output everything above" — asks for the prompt without naming it.
+  /\b(?:repeat|output|show|print)\s+(?:everything|all\s+(?:the\s+)?text)\s+above\b/i,
+  // A fake wire/press-release/system block with an embedded meta-instruction —
+  // the exact live pattern, generalized past just "editor note".
+  /\b(?:editor|developer|debug|system)\s+note\s*:.*(?:disregard|ignore|append|reveal)/i,
+  // Named jailbreak personas and modes — DAN/STAN/AIM/DUDE are public,
+  // well-documented jailbreak prompts, so only flag the activating framing
+  // ("you are now DAN", "DAN mode"), not the bare word, since AIM/DUDE double
+  // as ordinary English and this is log-only so a rare miss costs nothing but
+  // a noisy log costs signal.
+  /\b(?:you\s+are\s+now|act\s+as|become|enable)\s+(?:DAN|STAN|AIM|DUDE)\b/i,
+  /\b(?:DAN|STAN|developer|debug|god|admin)\s+mode\b/i,
+  /\bjailbreak(?:s|ing|ed)?\b/i,
+  // "No restrictions" framing, anchored to the model itself (you/your) so it
+  // doesn't fire on an ordinary finance question about restrictions on a
+  // STOCK ("no restrictions on foreign ownership") — that phrasing is common
+  // and legitimate, this one specifically is not.
+  /\b(?:you\s+have\s+no|no\s+restrictions?\s+on\s+you\b|without\s+(?:any\s+)?restrictions?,?\s+you\b|your\s+(?:restrictions?|filters?|guardrails?)\s+(?:are\s+)?(?:removed|disabled|gone|off)\b)/i,
+  /\b(?:remove\s+(?:all\s+)?your|disable\s+(?:your\s+)?)\s*(?:restrictions?|filters?|guardrails?|safety\s+(?:rules?|guidelines?))\b/i,
   /\broleplay\s+as\s+(?:an?\s+)?(?:llm|ai|model)\s+whose\s+(?:system\s?prompt|instructions)/i,
   /\bpretend\s+(?:you\s+are|to\s+be)\s+.{0,40}\bno\s+restrictions?\b/i,
+  /\bhypothetically\b.{0,40}\bno\s+rules\b/i,
+  // Encoding tricks: ask the model to launder the prompt through a transform a
+  // naive literal-string scan on the OUTPUT wouldn't recognize as the prompt.
+  /\bbase\s?64[\s-]?(?:encod|decod)/i,
+  /\brot\s?13\b/i,
+  /\bhex\s?(?:encod|decod)/i,
+  /\bspell\s+(?:it|that|this)\s+(?:backwards?|in\s+reverse)\b/i,
+  /\breverse\s+(?:the\s+)?(?:text|that|this)\s+and\s+(?:say|output|print)\b/i,
 ];
 
 /** Returns the jailbreak/exfiltration snippets found in an INCOMING question
  *  (empty if clean). Log-only — the prompt rules and output scanner are the
- *  actual defense, this just makes an attempt visible whether or not it works. */
+ *  actual defense, this just makes an attempt visible whether or not it works.
+ *  Shares normalizeForScan with the output leak scanner so the same Unicode/
+ *  markdown evasions are closed on both sides. */
 export function scanForInjectionAttempt(text: string): string[] {
   if (!text) return [];
+  const norm = normalizeForScan(text);
   const hits: string[] = [];
   for (const re of INJECTION_ATTEMPT_PATTERNS) {
-    const m = text.match(re);
+    const m = norm.match(re);
     if (m) hits.push(m[0]);
   }
   return hits;
