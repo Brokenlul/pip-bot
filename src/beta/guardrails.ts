@@ -97,7 +97,7 @@ export interface SafetyEventRow {
   guildId: string;
   userId: string;
   /** Which backstop fired: a hard-blocked prompt-leak, or a logged signal-language slip. */
-  kind: 'prompt_leak' | 'signal_language';
+  kind: 'prompt_leak' | 'signal_language' | 'injection_attempt';
   /** The matched snippets (signal_language) or a short note; omit for prompt_leak. */
   detail?: string;
   questionHash?: string;

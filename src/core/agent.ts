@@ -59,6 +59,7 @@ import {
   fenceToolResult,
   scanForPromptLeak,
   scanForSignalLanguage,
+  scanForInjectionAttempt,
   SAFE_REFUSAL,
   MAX_INPUT_LEN,
 } from './safety.js';
@@ -384,6 +385,24 @@ export async function answer(msg: NormalizedMessage, opts: AnswerOptions = {}): 
   // model or poisoning the cache key. Beta tightens the cap further.
   const inLen = beta ? CAPS.perUser.maxQuestionLen : MAX_INPUT_LEN;
   const questionText = sanitizeInbound(msg.text ?? '', inLen);
+
+  // Log-only visibility on a jailbreak/exfiltration attempt in the incoming
+  // question. Never blocks or changes the answer, the prompt rules and the
+  // output-side leak scanner are what actually defend, this just makes an
+  // attempt durable so a repeat pattern from one user is visible in
+  // safety_event instead of leaving no trace whenever it's (correctly) refused.
+  const injectionHits = scanForInjectionAttempt(questionText);
+  if (injectionHits.length) {
+    console.warn(`[safety] injection-attempt phrasing in input: ${injectionHits.join(' | ')}`);
+    void logSafetyEvent({
+      platform: msg.platform,
+      guildId: msg.guildId,
+      userId: msg.userId,
+      kind: 'injection_attempt',
+      detail: injectionHits.join(' | '),
+      questionHash: questionHash(questionText),
+    }).catch(() => {});
+  }
 
   // Side-effects that must not block or delay the answer. incrementUsage
   // waits for the guild upsert (FK ordering) but the reply waits for neither.

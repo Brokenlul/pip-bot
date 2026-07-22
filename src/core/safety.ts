@@ -132,3 +132,41 @@ export function scanForSignalLanguage(text: string): string[] {
   }
   return hits;
 }
+
+// Input-side jailbreak/exfiltration phrasing. A live incident showed the
+// existing defenses (prompt rules + the output-side leak scanner) actually
+// held against real attempts, twice, but left NO record either time, nothing
+// was logged because nothing leaked. That means every failed attempt was
+// invisible: no count of how often it's tried, no way to spot one user
+// escalating across a session. This closes that blind spot, same
+// log-only philosophy as signal language: never blocks or alters the
+// answer (the prompt rules are still what actually defends), just makes
+// an attempt durable and visible instead of leaving a trace only when it
+// works.
+const INJECTION_ATTEMPT_PATTERNS: RegExp[] = [
+  /\b(?:ignore|disregard|forget)\s+(?:all\s+)?(?:prior|previous|the\s+above|earlier)\s+instructions?\b/i,
+  /\bsystem\s?prompt\b/i,
+  /\b(?:reveal|repeat|print|output|show|leak|dump)\s+(?:your|the)\s+(?:instructions|prompt|configuration|config)\b/i,
+  /\bwhat\s+(?:are|is)\s+your\s+(?:instructions|system\s?prompt|configuration)\b/i,
+  /\bappend\s+your\s+(?:full\s+)?(?:configuration|system\s+instructions?)\b/i,
+  /\b(?:editor|developer|debug)\s+note\s*:.*(?:disregard|ignore|append)/i,
+  /\bdeveloper\s+mode\b/i,
+  /\bjailbreak\b/i,
+  /\bDAN\s+mode\b/i,
+  /\bbase\s?64[\s-]?(?:encod|decod)/i,
+  /\broleplay\s+as\s+(?:an?\s+)?(?:llm|ai|model)\s+whose\s+(?:system\s?prompt|instructions)/i,
+  /\bpretend\s+(?:you\s+are|to\s+be)\s+.{0,40}\bno\s+restrictions?\b/i,
+];
+
+/** Returns the jailbreak/exfiltration snippets found in an INCOMING question
+ *  (empty if clean). Log-only — the prompt rules and output scanner are the
+ *  actual defense, this just makes an attempt visible whether or not it works. */
+export function scanForInjectionAttempt(text: string): string[] {
+  if (!text) return [];
+  const hits: string[] = [];
+  for (const re of INJECTION_ATTEMPT_PATTERNS) {
+    const m = text.match(re);
+    if (m) hits.push(m[0]);
+  }
+  return hits;
+}
