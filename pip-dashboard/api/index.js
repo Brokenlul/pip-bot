@@ -356,15 +356,7 @@ async function viewPeople(filter) {
       <td class="mono">${p.msgs}</td>
       <td class="muted">${p.lastActive ? ago(p.lastActive) : '—'}</td>
       <td class="mono ${lapsed ? 'bad' : ''}">${until}</td>
-      <td>
-        ${p.labels.map((l) => `<span class="pill">${esc(l)}</span>`).join(' ') || '<span class="muted">—</span>'}
-        <form method="POST" action="/people/label" style="display:inline-flex;gap:4px;margin-top:4px">
-          <input type="hidden" name="platform" value="${esc(p.platform)}">
-          <input type="hidden" name="id" value="${esc(p.platformId)}">
-          <input name="labels" value="${esc(p.labels.join(', '))}" placeholder="tag, tag" style="width:130px;font-size:11px">
-          <button class="btn" type="submit" style="font-size:11px">save</button>
-        </form>
-      </td>
+      <td>${statusSelect(p)}</td>
       <td style="white-space:nowrap">
         ${accessForm(p, 7, '+7d')}
         ${accessForm(p, 0, 'revoke')}
@@ -384,11 +376,13 @@ async function viewPeople(filter) {
         ${stat('Activated', (counts.activated || 0) + (counts.returned || 0), `${counts.returned || 0} came back another day`)}
         ${stat('Paid', counts.paid || 0, `${counts.lapsed || 0} lapsed`)}
       </div>
-      ${card('Filter', `<div style="display:flex;gap:6px;flex-wrap:wrap">
+      ${card('Filter', `<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">
         ${chip('all', '')}${chip('leads', 'lead')}${chip('activated', 'activated')}${chip('returned', 'returned')}${chip('lapsed', 'lapsed')}${chip('paid', 'paid')}
+        <span class="muted" style="margin:0 4px">·</span>
+        ${STATUSES.map((s) => chip(s, s)).join('')}
       </div>`)}
       ${card('People', table(
-        ['Person', 'Stage', 'Source', 'Msgs', 'Last active', 'Access until', 'Labels', 'Access'],
+        ['Person', 'Stage', 'Source', 'Msgs', 'Last active', 'Access until', 'Status', 'Access'],
         body,
       ))}
       <div class="card"><p class="muted">
@@ -398,6 +392,32 @@ async function viewPeople(filter) {
         expiry, and never consume the user's tweet-for-a-week grant.
       </p></div>`,
   });
+}
+
+// Pipeline status. A fixed vocabulary rather than free text, so the filter
+// chips and any later reporting can rely on the values actually matching.
+const STATUSES = ['dead lead', 'warm', 'hot', 'extended', 'revenue'];
+
+/**
+ * Single-select status that saves on change, so tagging someone is one click.
+ *
+ * Stored in the same labels[] column, as a 0- or 1-element array. Any existing
+ * value outside STATUSES (e.g. tags typed before this dropdown existed) is
+ * carried as an extra option rather than silently dropped on the next save.
+ */
+function statusSelect(p) {
+  const current = p.labels[0] || '';
+  const options = STATUSES.includes(current) || !current ? STATUSES : [...STATUSES, current];
+  return `<form method="POST" action="/people/label" style="display:inline">
+    <input type="hidden" name="platform" value="${esc(p.platform)}">
+    <input type="hidden" name="id" value="${esc(p.platformId)}">
+    <select name="labels" class="status s-${esc(current.replace(/\s+/g, '-') || 'none')}" onchange="this.form.submit()">
+      <option value=""${current ? '' : ' selected'}>—</option>
+      ${options.map((s) =>
+        `<option value="${esc(s)}"${s === current ? ' selected' : ''}>${esc(s)}</option>`).join('')}
+    </select>
+    <noscript><button class="btn" type="submit" style="font-size:11px">set</button></noscript>
+  </form>`;
 }
 
 function accessForm(p, days, label) {

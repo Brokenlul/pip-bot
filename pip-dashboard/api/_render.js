@@ -144,8 +144,15 @@ input,button{font:15px inherit;font-family:-apple-system,BlinkMacSystemFont,'Seg
 .pill{display:inline-block;font:11px ui-monospace,monospace;color:var(--sage);border:1px solid var(--hair);border-radius:99px;padding:2px 8px;margin-right:6px}
 a.pill{text-decoration:none}
 a.pill.on{background:var(--sage);color:#fff;border-color:var(--sage)}
-/* CRM row controls: inputs and buttons sit inline inside table cells. */
-input[name="labels"]{background:transparent;border:1px solid var(--hair);border-radius:6px;color:inherit;padding:2px 6px;font:11px ui-monospace,monospace}
+/* CRM row controls: the status dropdown saves on change, so it is colour-coded
+   to be readable at a glance down the column rather than needing a legend. */
+select.status{background:transparent;border:1px solid var(--hair);border-radius:99px;color:var(--sage);padding:2px 8px;font:11px ui-monospace,monospace;cursor:pointer}
+select.status option{background:var(--paper);color:var(--ink)}
+select.s-dead-lead{color:var(--sage);opacity:.6}
+select.s-warm{color:var(--gold);border-color:var(--gold)}
+select.s-hot{color:var(--clay);border-color:var(--clay)}
+select.s-extended{color:var(--sage);border-color:var(--sage)}
+select.s-revenue{color:var(--green);border-color:var(--green)}
 .trunc{max-width:400px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 @media(max-width:820px){.grid3,.grid4,.grid2{grid-template-columns:1fr 1fr}.trunc{max-width:220px}}@media(max-width:520px){.grid3,.grid4,.grid2{grid-template-columns:1fr}}
 `;
