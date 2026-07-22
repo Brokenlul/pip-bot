@@ -1,6 +1,7 @@
 import { getDb } from '../memory/db.js';
 import { fundingRateTool } from '../data/hyperliquid.js';
 import { pushMessage } from './push.js';
+import { resolveEarningsSchedule } from '../data/earnings-alerts.js';
 import type { ToolContext } from '../data/registry.js';
 
 /**
@@ -24,18 +25,48 @@ interface AlertRow {
   last_price: number | null;
 }
 
+interface EarningsAlertRow {
+  id: number;
+  platform: string;
+  user_id: string;
+  symbol: string;
+  note: string | null;
+  notify_at: string;
+  earnings_date: string;
+  earnings_when: string | null;
+  lead_minutes: number | null;
+}
+
 async function fetchActiveAlerts(): Promise<AlertRow[]> {
   const db = getDb();
   if (!db) return [];
   const { data, error } = await db
     .from('price_alerts')
     .select('id, platform, user_id, symbol, direction, target_price, note, last_price')
-    .eq('active', true);
+    .eq('active', true)
+    .eq('kind', 'price');
   if (error) {
     console.warn(`[alerts] fetch active: ${error.message}`);
     return [];
   }
   return (data ?? []) as AlertRow[];
+}
+
+/** Earnings alerts whose lead time has elapsed. */
+async function fetchDueEarningsAlerts(): Promise<EarningsAlertRow[]> {
+  const db = getDb();
+  if (!db) return [];
+  const { data, error } = await db
+    .from('price_alerts')
+    .select('id, platform, user_id, symbol, note, notify_at, earnings_date, earnings_when, lead_minutes')
+    .eq('active', true)
+    .eq('kind', 'earnings')
+    .lte('notify_at', new Date().toISOString());
+  if (error) {
+    console.warn(`[alerts] fetch due earnings: ${error.message}`);
+    return [];
+  }
+  return (data ?? []) as EarningsAlertRow[];
 }
 
 async function markTriggered(id: number): Promise<void> {
@@ -68,7 +99,64 @@ function pushText(alert: AlertRow, price: number): string {
   return `🔔 ${alert.symbol} just ${verb} $${alert.target_price.toLocaleString()} (now $${price.toLocaleString()})${note}\n\nNot financial advice.`;
 }
 
+function earningsPushText(row: EarningsAlertRow): string {
+  const mins = row.lead_minutes ?? 60;
+  const lead =
+    mins >= 1440
+      ? `${Math.round(mins / 1440)}d`
+      : mins >= 60
+        ? `${Math.round(mins / 60)}h`
+        : `${mins}m`;
+  const when = row.earnings_when ? ` (${row.earnings_when})` : '';
+  const note = row.note ? `\n\nYou wanted to watch: ${row.note}` : '';
+  return (
+    `🔔 ${row.symbol} reports earnings in about ${lead} — ${row.earnings_date}${when}.` +
+    `${note}\n\nAsk me for the setup and I'll pull the consensus and the recent beat/miss record.\n\nNot financial advice.`
+  );
+}
+
+/**
+ * Fire earnings alerts whose lead time has elapsed.
+ *
+ * Companies reschedule prints, so we re-verify the date before pushing: if it
+ * moved out, we reschedule the row rather than firing a wrong alert. That check
+ * needs the equity provider, so on any lookup failure we fall back to pushing
+ * the alert we already have — a slightly stale heads-up beats silence for
+ * someone who explicitly asked to be told.
+ */
+async function pollEarningsOnce(): Promise<void> {
+  const due = await fetchDueEarningsAlerts();
+  if (due.length === 0) return;
+  const db = getDb();
+  if (!db) return;
+
+  for (const row of due) {
+    try {
+      const sched = await resolveEarningsSchedule(row.symbol, row.lead_minutes ?? 60, SYSTEM_CTX);
+      if (sched.earnings_date !== row.earnings_date && sched.notify_at.getTime() > Date.now()) {
+        const { error } = await db
+          .from('price_alerts')
+          .update({
+            notify_at: sched.notify_at.toISOString(),
+            earnings_date: sched.earnings_date,
+            earnings_when: sched.earnings_when,
+          })
+          .eq('id', row.id);
+        if (error) console.warn(`[alerts] earnings reschedule(${row.id}): ${error.message}`);
+        else console.log(`[alerts] ${row.symbol} moved ${row.earnings_date} -> ${sched.earnings_date}, rescheduled`);
+        continue;
+      }
+    } catch (e) {
+      console.warn(`[alerts] earnings re-verify failed for ${row.symbol}: ${(e as Error).message}`);
+    }
+    const sent = await pushMessage(row.platform, row.user_id, earningsPushText(row));
+    if (sent) await markTriggered(row.id);
+  }
+}
+
 async function pollOnce(): Promise<void> {
+  await pollEarningsOnce();
+
   const alerts = await fetchActiveAlerts();
   if (alerts.length === 0) return;
 

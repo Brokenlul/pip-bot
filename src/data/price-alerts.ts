@@ -83,12 +83,23 @@ export const setPriceAlertTool: Tool<SetInput, SetOutput> = {
 const ListSchema = z.object({});
 type ListInput = z.infer<typeof ListSchema>;
 interface ListOutput {
-  alerts: Array<{ id: number; symbol: string; direction: string; target_price: number; note: string | null; created_at: string }>;
+  alerts: Array<{
+    id: number;
+    kind: string;
+    symbol: string;
+    direction: string | null;
+    target_price: number | null;
+    notify_at: string | null;
+    earnings_date: string | null;
+    note: string | null;
+    created_at: string;
+  }>;
 }
 
 export const listPriceAlertsTool: Tool<ListInput, ListOutput> = {
   name: 'list_price_alerts',
-  description: 'List this user\'s active (not-yet-triggered) price alerts. Use for "what alerts do I have", "what am I watching for".',
+  description:
+    'List this user\'s active (not-yet-triggered) alerts — BOTH price-level alerts and upcoming earnings alerts. Use for "what alerts do I have", "what am I watching for". Each row carries `kind`: "price" (fires when target_price is crossed) or "earnings" (fires at notify_at, ahead of earnings_date).',
   inputSchema: { type: 'object', properties: {}, required: [] },
   validate: zValidator(ListSchema),
   execute: async (_input, ctx) => {
@@ -96,7 +107,7 @@ export const listPriceAlertsTool: Tool<ListInput, ListOutput> = {
     if (!db) throw new Error('Price alerts need memory (Supabase) to be configured.');
     const { data, error } = await db
       .from('price_alerts')
-      .select('id, symbol, direction, target_price, note, created_at')
+      .select('id, kind, symbol, direction, target_price, notify_at, earnings_date, note, created_at')
       .eq('platform', ctx.platform)
       .eq('user_id', ctx.userId)
       .eq('active', true)
@@ -119,7 +130,8 @@ interface CancelOutput {
 
 export const cancelPriceAlertTool: Tool<CancelInput, CancelOutput> = {
   name: 'cancel_price_alert',
-  description: 'Cancel one of this user\'s active price alerts by id (get the id from list_price_alerts first). Use for "cancel that alert", "never mind, stop watching for X".',
+  description:
+    'Cancel one of this user\'s active alerts by id — works for both price and earnings alerts (get the id from list_price_alerts first). Use for "cancel that alert", "never mind, stop watching for X".',
   inputSchema: {
     type: 'object',
     properties: { id: { type: 'number', description: 'Alert id from list_price_alerts.' } },
