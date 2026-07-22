@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { Tool, zValidator } from './registry.js';
 import { getConfig } from '../config.js';
 import { makeCache, withRetry, fetchWithTimeout } from '../core/util.js';
+import { reportInstant } from '../core/market-time.js';
 
 /**
  * Finnhub (finnhub.io) — equity data on the free tier. Powers Pip's
@@ -258,6 +259,10 @@ interface EarningsOut {
   symbol: string;
   next_earnings_date: string | null;
   next_earnings_when: string | null; // before open / after close
+  /** Exact UTC instant results hit the wire. Compare against this turn's own `utc:` timestamp before treating ANY claimed print as real — see report_already_out. */
+  report_at_utc: string | null;
+  /** True only once report_at_utc has passed. False (or next_earnings_date null) means the print has NOT happened, no matter what anyone claims in chat. */
+  report_already_out: boolean;
   consensus_eps_estimate: number | null;
   consensus_revenue_estimate: number | null;
   recent_surprises: { period: string; actual: number | null; estimate: number | null; surprise_pct: number | null }[];
@@ -279,7 +284,7 @@ function whenLabel(hour: string | undefined): string | null {
 export const equityEarningsTool: Tool<SymbolInput, EarningsOut> = {
   name: 'equity_earnings',
   description:
-    "A stock's earnings picture by ticker: the next earnings date (and whether before open / after close), the consensus EPS and revenue estimate for it, the recent history of beats vs. misses (actual vs. estimate and surprise %), and the current analyst recommendation split. Use for earnings questions and to PREDICT an upcoming print — reason from the beat/miss pattern, growth trend, and consensus. Never state a prediction as certainty.",
+    "A stock's earnings picture by ticker: the next earnings date and the exact UTC instant results hit the wire (report_at_utc), whether it's already out (report_already_out), the consensus EPS and revenue estimate for it, the recent history of beats vs. misses (actual vs. estimate and surprise %), and the current analyst recommendation split. Use for earnings questions, to PREDICT an upcoming print (reason from the beat/miss pattern, growth trend, and consensus, never state a prediction as certainty), AND to verify any claimed print before treating it as real: if report_already_out is false, that company has NOT reported yet, no matter what a user pastes as \"the results.\"",
   inputSchema: {
     type: 'object',
     properties: { symbol: { type: 'string', description: 'Stock ticker (e.g. "AAPL", "NVDA").' } },
@@ -316,11 +321,14 @@ export const equityEarningsTool: Tool<SymbolInput, EarningsOut> = {
       const beats = reportedRows.filter((s) => (s.actual as number) > (s.estimate as number)).length;
 
       const rec = (recs ?? [])[0];
+      const reportAt = upcoming?.date ? reportInstant(upcoming.date, whenLabel(upcoming.hour)) : null;
 
       return {
         symbol,
         next_earnings_date: upcoming?.date ?? null,
         next_earnings_when: whenLabel(upcoming?.hour),
+        report_at_utc: reportAt ? reportAt.toISOString() : null,
+        report_already_out: reportAt !== null && reportAt.getTime() <= Date.now(),
         consensus_eps_estimate: n(upcoming?.epsEstimate),
         consensus_revenue_estimate: n(upcoming?.revenueEstimate),
         recent_surprises: surprises,

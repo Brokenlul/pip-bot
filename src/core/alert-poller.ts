@@ -1,7 +1,8 @@
 import { getDb } from '../memory/db.js';
 import { fundingRateTool } from '../data/hyperliquid.js';
 import { pushMessage, pushToChannel } from './push.js';
-import { resolveEarningsSchedule, reportInstant } from '../data/earnings-alerts.js';
+import { resolveEarningsSchedule } from '../data/earnings-alerts.js';
+import { reportInstant } from './market-time.js';
 import type { ToolContext } from '../data/registry.js';
 
 /**
