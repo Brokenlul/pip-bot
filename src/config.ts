@@ -70,8 +70,10 @@ const Schema = z
     BETA_USER_DAILY_MSGS: z.coerce.number().int().positive().default(25),
     // Per-server daily spend cap (USD). Bounds what any single guild can burn
     // even while the global budget has headroom. DMs are not guild-capped —
-    // the per-user cap bounds those.
-    BETA_GUILD_DAILY_SPEND_USD: z.coerce.number().positive().default(10),
+    // the per-user cap bounds those. $3/day x 7-day trial = $21 worst case,
+    // kept under the $30/mo server-pro price so a full trial can never
+    // out-cost a month of paying.
+    BETA_GUILD_DAILY_SPEND_USD: z.coerce.number().positive().default(3),
     // Per-user daily spend cap (USD) — resets at midnight UTC like the other
     // daily caps. Follows the user across guilds and DMs.
     BETA_USER_DAILY_SPEND_USD: z.coerce.number().positive().default(2),
