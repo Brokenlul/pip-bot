@@ -40,6 +40,72 @@ async function loadSiteEvents(days = 7) {
   const since = iso(Date.now() - days * DAY);
   return sb(`site_events?select=created_at,visitor_id,session_id,event,path,target,referrer_host,utm_source,utm_campaign,country,device&created_at=gte.${since}&order=created_at.desc&limit=50000`);
 }
+// ---- CRM writes ------------------------------------------------------------
+// The console is read-only everywhere else on purpose. These three are the
+// exception: they are the whole point of the People view, and each is scoped to
+// a single (platform, platform_id) so a bug cannot touch more than one person.
+async function sbWrite(path, method, body, extraPrefer) {
+  const { url, key } = sbCreds();
+  if (!url || !key) throw new Error('supabase not configured');
+  const r = await fetch(`${url}/rest/v1/${path}`, {
+    method,
+    headers: {
+      apikey: key,
+      authorization: `Bearer ${key}`,
+      'content-type': 'application/json',
+      prefer: extraPrefer || 'return=minimal',
+    },
+    body: body == null ? undefined : JSON.stringify(body),
+  });
+  if (!r.ok) throw new Error(`supabase ${r.status}: ${(await r.text()).slice(0, 200)}`);
+  return r.status === 204 ? null : r.json().catch(() => null);
+}
+
+async function loadAttribution(limit = 5000) {
+  return sb(`attribution_claims?select=token,visitor_id,intent,minted_at,claimed_at,platform,platform_id,guild_id,meta&order=claimed_at.desc&limit=${limit}`);
+}
+async function loadLabels() {
+  return sb('person_labels?select=platform,platform_id,labels,note,updated_at&limit=5000');
+}
+
+/** Replace a person's label set. Upsert so an untagged lead can be tagged. */
+async function saveLabels(platform, platformId, labels, note) {
+  return sbWrite(
+    'person_labels?on_conflict=platform,platform_id',
+    'POST',
+    {
+      platform,
+      platform_id: platformId,
+      labels,
+      note: note || null,
+      updated_at: new Date().toISOString(),
+    },
+    'resolution=merge-duplicates,return=minimal',
+  );
+}
+
+/**
+ * Grant or revoke access. `days` extends from NOW, not from the old expiry —
+ * extending an already-lapsed user by 7 days from a past date would grant them
+ * nothing. days=0 revokes by expiring them immediately.
+ *
+ * extension_used is deliberately NOT touched: that flag belongs to the
+ * tweet-for-a-week grant, and a founder comp must not burn the user's one tweet.
+ */
+async function setAccess(platform, platformId, days) {
+  const until = days > 0 ? new Date(Date.now() + days * DAY).toISOString() : new Date().toISOString();
+  const q = `beta_testers?platform=eq.${encodeURIComponent(platform)}&platform_id=eq.${encodeURIComponent(platformId)}`;
+  const updated = await sbWrite(q, 'PATCH', { access_until: until }, 'return=representation');
+  // No row means this is a lead who never messaged. Create one so the grant
+  // actually lands — otherwise the button silently does nothing.
+  if (!updated || updated.length === 0) {
+    await sbWrite('beta_testers?on_conflict=platform,platform_id', 'POST', {
+      platform, platform_id: platformId, name: 'granted', access_until: until,
+    }, 'resolution=merge-duplicates,return=minimal');
+  }
+  return until;
+}
+
 async function loadActivity(limit = 100) {
   return sb(`conversations?select=created_at,guild_id,user_id,question,answer&order=created_at.desc&limit=${limit}`);
 }
@@ -92,6 +158,7 @@ async function fetchDodo() {
     const s = sRes.ok ? await sRes.json() : { items: [] };
     const payments = (p.items || []).map((t) => ({
       provider: 'dodo',
+      id: first(t.payment_id, t.id, t.reference_id), // read defensively; used by PAYMENTS_EXCLUDE_IDS
       amount: num(t.total_amount, t.amount, t.settlement_amount) / 100, // Dodo amounts are minor units
       currency: first(t.currency, t.settlement_currency, 'USD'),
       created_at: first(t.created_at, t.created),
@@ -128,6 +195,7 @@ async function fetchMoonpay() {
         const meta = t.meta || t.paymentRequest || {};
         out.push({
           provider: 'moonpay',
+          id: first(t.id, t._id, t.transactionId), // read defensively; used by PAYMENTS_EXCLUDE_IDS
           amount: num(t.amountUsd, t.amount, meta.amount) / (t.amount && !t.amountUsd ? 1e6 : 1), // USDC minor units → USD if raw
           currency: first(t.currency, 'USDC'),
           created_at: first(t.createdAt, t.created_at, t.paidAt),
@@ -145,11 +213,25 @@ async function fetchMoonpay() {
   }
 }
 
+/**
+ * Payment ids to hide from the console, comma-separated in PAYMENTS_EXCLUDE_IDS.
+ *
+ * Test transactions live in the provider's own ledger and must not be deleted
+ * there, so they are filtered at read time instead. Matching is on the payment
+ * id rather than on amount or currency: hiding "everything for ₹110" would also
+ * hide a real ₹110 sale the day you start charging in INR.
+ */
+function excludedPaymentIds() {
+  return new Set((process.env.PAYMENTS_EXCLUDE_IDS || '').split(',').map((s) => s.trim()).filter(Boolean));
+}
+
 async function loadPayments() {
   if (_payCache.data && Date.now() - _payCache.at < PROVIDER_TTL) return _payCache.data;
   const [dodo, moon] = await Promise.all([fetchDodo(), fetchMoonpay()]);
+  const excluded = excludedPaymentIds();
   const payments = [...dodo.payments, ...moon.payments]
     .filter((p) => p.created_at)
+    .filter((p) => !p.id || !excluded.has(String(p.id)))
     .sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
   const data = { payments, dodoSubs: dodo.subs || [], ok: dodo.ok || moon.ok, dodoOk: dodo.ok, moonOk: moon.ok };
   _payCache = { at: Date.now(), data };
@@ -256,5 +338,6 @@ function overviewMetrics(rows, testers, feedback, caps, founderKeys) {
 
 module.exports = {
   sb, loadUsage, loadTesters, loadFeedback, loadSafetyEvents, loadSiteEvents, loadActivity, loadUserConversations, loadUserProfile,
+  loadAttribution, loadLabels, saveLabels, setAccess,
   loadPayments, classify, tierPrice, inferBilling, overviewMetrics, TIER, DAY,
 };

@@ -294,10 +294,21 @@ async function claimHandleRow(
   return { access_until: merged, extension_used: existing.extension_used };
 }
 
-/** First-touch enrollment from an allowlisted server. Idempotent (PK upsert). */
-async function autoEnroll(platform: string, platformId: string, name?: string): Promise<TesterRow | null> {
+/**
+ * First-touch enrollment on any surface, DMs included. Idempotent (PK upsert).
+ *
+ * `created` distinguishes a genuine first touch from a repeat, which is what
+ * lets an adapter greet a new arrival exactly once. With ignoreDuplicates a
+ * returned row means the INSERT really happened; no row means we raced an
+ * existing one, so we re-read and report created:false.
+ */
+async function autoEnroll(
+  platform: string,
+  platformId: string,
+  name?: string,
+): Promise<{ row: TesterRow | null; created: boolean }> {
   const db = getDb();
-  if (!db) return null;
+  if (!db) return { row: null, created: false };
   const { data, error } = await db
     .from('beta_testers')
     .upsert(
@@ -307,11 +318,14 @@ async function autoEnroll(platform: string, platformId: string, name?: string): 
     .select(TESTER_COLS);
   if (error) {
     console.warn(`[beta] autoEnroll: ${error.message}`);
-    return null;
+    return { row: null, created: false };
   }
-  console.log(`[beta] auto-enrolled ${platform}:${platformId} (${name ?? 'auto'}) via server invite`);
-  // ignoreDuplicates returns no row when we raced an existing insert — re-read.
-  return (data?.[0] as TesterRow | undefined) ?? getTester(platform, platformId);
+  const inserted = data?.[0] as TesterRow | undefined;
+  if (inserted) {
+    console.log(`[beta] auto-enrolled ${platform}:${platformId} (${name ?? 'auto'}) on first touch`);
+    return { row: inserted, created: true };
+  }
+  return { row: await getTester(platform, platformId), created: false };
 }
 
 // ---- Free exact-match answer cache ----------------------------------------
@@ -459,6 +473,12 @@ export interface GateDecision {
   /** Per-request feature budget handed to the agent when allowed. */
   features: { web: boolean; vision: boolean; scan: boolean };
   degraded: boolean;
+  /**
+   * True only on the message that actually created this user's row, so an
+   * adapter can greet a genuinely new arrival exactly once. Never set on a
+   * repeat message, and never set when the enrol write failed.
+   */
+  enrolled?: boolean;
 }
 
 const ALLOW_ALL: GateDecision = {
@@ -468,7 +488,6 @@ const ALLOW_ALL: GateDecision = {
 };
 
 const lastMessageAt = new Map<string, number>(); // userKey -> ms (cooldown)
-const politeRepliedToday = new Set<string>(); // non-testers: one reply/day
 
 /**
  * The single pre-LLM checkpoint. Returns a decision the adapter acts on BEFORE
@@ -480,34 +499,45 @@ export async function betaGate(msg: NormalizedMessage): Promise<GateDecision> {
   const now = Date.now();
   const userKey = `${msg.platform}:${msg.userId}`;
 
-  // 0. Beta window closed → wrap-up, no serving.
+  // 0. Hard stop switch. Retained as an emergency "pause Pip for everyone"
+  //    lever, but it is NOT part of normal public operation — leave BETA_ENDS_AT
+  //    unset. If it ever holds a past timestamp, Pip goes dark for every user,
+  //    testers included, which is exactly what it did through the private beta.
   if (cfg.BETA_ENDS_AT) {
     const ends = new Date(cfg.BETA_ENDS_AT).getTime();
     if (Number.isFinite(ends) && now > ends) {
       return blocked(
         cfg.BETA_END_MESSAGE ??
-          "The Pip beta has wrapped — thank you for testing 🌱 We're folding your feedback in. You'll hear when Pip is back.",
+          "Pip is paused for maintenance right now 🌱 Back shortly — thanks for your patience.",
       );
     }
   }
 
-  // 1. Enrollment. The server INVITE is the trust boundary (user decision
-  //    2026-07-06): anyone who reaches Pip inside any server it was added to
-  //    is auto-enrolled — adding the bot needs Manage Server, and the per-guild
-  //    spend cap + per-user caps bound every new enrollee. DMs stay tester-only
-  //    (no auto-enroll from DMs; a DM-first user needs a guild touch or a
-  //    manual/handle invite first).
+  // 1. Enrollment. PUBLIC ACCESS (user decision 2026-07-22): Pip is no longer
+  //    private beta. Anyone who reaches Pip on any surface is enrolled on first
+  //    touch and starts the standard trial — beta_testers.access_until defaults
+  //    to now() + 7 days (0006_trial.sql), so this grants no more than a normal
+  //    signup would.
+  //
+  //    DMs used to be excluded here, which silently turned away every visitor
+  //    arriving from the website's Telegram CTA — t.me/pipinvestbot can only
+  //    ever open a DM, so that path could never enrol anyone. Cost is bounded
+  //    by the per-user / per-guild / global caps below, not by an allowlist.
+  let enrolled = false;
   let tester = await getTester(msg.platform, msg.userId);
   if (!tester) tester = await claimHandleRow(msg, null);
-  if (!tester && !msg.guildId.startsWith('dm:')) {
-    tester = await autoEnroll(msg.platform, msg.userId, msg.userName);
+  if (!tester) {
+    const res = await autoEnroll(msg.platform, msg.userId, msg.userName);
+    tester = res.row;
+    enrolled = res.created;
   }
   if (!tester) {
-    const day = dayStartUtc().toISOString().slice(0, 10);
-    const key = `${day}:${userKey}`;
-    if (politeRepliedToday.has(key)) return blockedSilent('non-tester repeat', msg);
-    politeRepliedToday.add(key);
-    return blocked('Pip is in private beta right now. Sit tight, public access is coming soon. 🌱');
+    // autoEnroll only returns null when the DB write itself failed. Fail OPEN
+    // on a fresh trial rather than turning a real user away — a Supabase blip
+    // must not surface to a new arrival as a rejection. The spend caps below
+    // still apply, so this cannot run away.
+    console.warn(`[beta] enrol failed, serving open: ${msg.platform}:${msg.userId}`);
+    tester = { access_until: null, extension_used: false };
   }
 
   // 2. Optional server / channel restriction — only bites when the env lists
@@ -574,7 +604,7 @@ export async function betaGate(msg: NormalizedMessage): Promise<GateDecision> {
 
   // 5. Global kill-switch — the real protection.
   if (globalSpend >= spendCap || globalMsgs >= cfg.BETA_DAILY_GLOBAL_MSGS) {
-    return blocked("Pip's daily beta budget is spent, back at midnight UTC. This keeps the beta free for everyone 🌱");
+    return blocked("Pip's daily budget is spent, back at midnight UTC. This keeps Pip running for everyone 🌱");
   }
 
   // 5b. Per-server spend cap — one busy guild can't drain the global budget.
@@ -585,7 +615,7 @@ export async function betaGate(msg: NormalizedMessage): Promise<GateDecision> {
       .reduce((s, r) => s + Number(r.cost_usd), 0);
     if (guildSpend >= cfg.BETA_GUILD_DAILY_SPEND_USD) {
       return blocked(
-        "This server's daily Pip budget is spent — back at midnight UTC. DMs still work if you're a beta tester 🌱",
+        "This server's daily Pip budget is spent — back at midnight UTC. DMs still work in the meantime 🌱",
       );
     }
   }
@@ -601,7 +631,7 @@ export async function betaGate(msg: NormalizedMessage): Promise<GateDecision> {
 
   if (!isFounder) {
     if (mine.length >= cfg.BETA_USER_DAILY_MSGS) {
-      return blocked("You've hit today's beta limit, it resets at midnight UTC. This keeps the beta free for everyone 🌱");
+      return blocked("You've hit today's limit, it resets at midnight UTC. This keeps Pip running for everyone 🌱");
     }
     const mySpend = mine.reduce((s, r) => s + Number(r.cost_usd), 0);
     if (mySpend >= cfg.BETA_USER_DAILY_SPEND_USD) {
@@ -618,6 +648,7 @@ export async function betaGate(msg: NormalizedMessage): Promise<GateDecision> {
   lastMessageAt.set(userKey, now); // consume the cooldown slot on a served turn
   return {
     allow: true,
+    enrolled,
     degraded,
     features: {
       web: isFounder || (!degraded && mySearches < CAPS.perUser.webSearches),

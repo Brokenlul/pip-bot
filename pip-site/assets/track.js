@@ -105,6 +105,50 @@
     return null;
   }
 
+  // ---- attribution handoff -------------------------------------------------
+  // A CTA click is where we lose people today: they leave for Discord/Telegram
+  // and arrive as a platform id with nothing tying them back to this visitor.
+  // Stamp a one-time token onto the handoff and the other side can claim it.
+  //
+  // The community invite (discord.gg/...) is deliberately absent: an invite
+  // link accepts no per-visitor parameter, so that path stays cohort-only.
+  var DISCORD_REDIRECT = 'https://pipinvest.xyz/api/discord-installed';
+
+  // Discord rejects an authorize link whose redirect_uri is not registered on
+  // the application, and it does so BEFORE the user sees the install screen —
+  // so shipping this ahead of the dev-portal change would kill the add-bot CTA
+  // outright. Flip to true only once DISCORD_REDIRECT is listed under
+  // OAuth2 → Redirects for application 1521437096294744216.
+  // Telegram attribution below needs no such registration and is always on.
+  var ADD_BOT_ATTRIBUTION = false;
+
+  function attribute(el, href, name) {
+    // Always rebuild from the pristine href, so a second click on the same
+    // element doesn't stack a second set of query parameters onto the first.
+    var base = el.getAttribute('data-attr-base');
+    if (!base) { base = href; el.setAttribute('data-attr-base', base); }
+
+    var token = rand().replace(/-/g, '').slice(0, 32);
+
+    if (name === 'telegram_bot') {
+      // Deep link: the payload arrives as the text of their /start message.
+      // Telegram caps it at 64 chars of [A-Za-z0-9_-] — 32 hex fits fine.
+      el.setAttribute('href', base.split('?')[0] + '?start=' + token);
+      return token;
+    }
+    if (name === 'discord_add_bot' && ADD_BOT_ATTRIBUTION) {
+      // response_type=code is required whenever redirect_uri is supplied, even
+      // for a bot-only install. Discord hands back ?code&state&guild_id, and
+      // guild_id is the part we actually want — we never exchange the code.
+      el.setAttribute('href', base +
+        '&response_type=code' +
+        '&redirect_uri=' + encodeURIComponent(DISCORD_REDIRECT) +
+        '&state=' + token);
+      return token;
+    }
+    return null;
+  }
+
   document.addEventListener('click', function (ev) {
     var el = ev.target && ev.target.closest ? ev.target.closest('a[href], button[id]') : null;
     if (!el) return;
@@ -132,6 +176,9 @@
     }
 
     var name = nameFor(href);
-    if (name) send('click', name);
+    if (name) {
+      var token = attribute(el, href, name);
+      send('click', name, token ? { token: token } : null);
+    }
   }, true);
 })();

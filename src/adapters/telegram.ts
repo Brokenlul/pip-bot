@@ -9,6 +9,7 @@ import {
   MessageHandler,
 } from './platform.js';
 import { betaGate, recordFeedback } from '../beta/guardrails.js';
+import { claimAttribution } from '../memory/attribution.js';
 import { renderReplyText } from '../core/formatter.js';
 import { registerPusher } from '../core/push.js';
 
@@ -144,6 +145,19 @@ export class TelegramAdapter implements PlatformAdapter {
     // /start = Telegram's universal opener (also fired by deep links with a
     // payload). Greet with who Pip is and how to use it — no model call.
     if (isDM && /^\/start(\s|$)/.test(rawText)) {
+      // The site's Telegram CTA is a deep link (t.me/pipinvestbot?start=<token>),
+      // and Telegram hands the payload over as the text of this very message —
+      // the one moment we can tie this brand-new account back to the anonymous
+      // visitor who clicked. Fire-and-forget: never delay the greeting for it.
+      const payload = rawText.slice('/start'.length).trim();
+      if (payload) {
+        void claimAttribution({
+          token: payload,
+          intent: 'telegram',
+          platform: 'telegram',
+          platformId: String(ctx.from.id),
+        }).catch((e) => console.warn(`[telegram] claimAttribution: ${(e as Error).message}`));
+      }
       await this.send(ctx, WELCOME);
       return;
     }

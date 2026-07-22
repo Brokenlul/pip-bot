@@ -48,9 +48,45 @@ module.exports = async function handler(req, res) {
     return res.end();
   }
 
+  // ---- CRM writes. POST-then-redirect so a refresh can't replay the action.
+  if (path === '/people/label' || path === '/people/access') {
+    if ((req.method || 'GET').toUpperCase() !== 'POST') {
+      res.statusCode = 405;
+      return res.end('method not allowed');
+    }
+    const form = new URLSearchParams(await readBody(req));
+    const platform = form.get('platform') || '';
+    const id = form.get('id') || '';
+    if (!platform || !id) {
+      res.statusCode = 400;
+      return res.end('bad request');
+    }
+    try {
+      if (path === '/people/label') {
+        const labels = (form.get('labels') || '')
+          .split(',').map((s) => s.trim().toLowerCase()).filter(Boolean).slice(0, 12);
+        await D.saveLabels(platform, id, labels, form.get('note'));
+      } else {
+        const days = Math.max(0, Math.min(365, Number(form.get('days') || 0)));
+        const until = await D.setAccess(platform, id, days);
+        console.log(`[admin] access ${days === 0 ? 'revoked' : `+${days}d`} for ${platform}:${id} → ${until}`);
+      }
+    } catch (e) {
+      console.error('[admin] CRM write failed:', e && e.message ? e.message : e);
+      return R.send(res, 502, R.shell({
+        title: 'Error', active: 'people',
+        body: `<div class="card"><p class="bad">That change did not save. Nothing was modified. Check the server logs.</p><p><a href="/people">Back to People</a></p></div>`,
+      }));
+    }
+    res.statusCode = 303; // 303 so the browser re-GETs instead of re-POSTing
+    res.setHeader('location', req.headers.referer && req.headers.referer.includes('/people') ? req.headers.referer : '/people');
+    return res.end();
+  }
+
   const view = path === '/' ? 'overview' : path.slice(1);
   try {
     switch (view) {
+      case 'people': return R.send(res, 200, await viewPeople(req.query.filter));
       case 'overview': return R.send(res, 200, await viewOverview());
       case 'funnel': return R.send(res, 200, await viewFunnel());
       case 'payments': return R.send(res, 200, await viewPayments());
@@ -148,7 +184,7 @@ async function viewPayments() {
   const rev = (days) => { const cut = now - days * D.DAY; return pay.payments.filter((p) => new Date(p.created_at).getTime() >= cut).reduce((s, p) => s + (Number(p.amount) || 0), 0); };
   const provSplit = { dodo: paidTesters.filter((t) => t.subscription_provider === 'dodo').length, moonpay: paidTesters.filter((t) => t.subscription_provider === 'moonpay').length, loop: paidTesters.filter((t) => t.subscription_provider === 'loop').length };
   const feed = pay.payments.slice(0, 40).map((p) =>
-    `<tr><td class="muted">${ago(p.created_at)}</td><td><span class="pill">${esc(p.provider)}</span></td><td>${usd(p.amount)} <span class="muted">${esc(p.currency)}</span></td><td class="mono">${esc(p.who || '—')}</td><td class="muted">${esc(p.status || '')}</td></tr>`).join('');
+    `<tr><td class="muted">${ago(p.created_at)}</td><td><span class="pill">${esc(p.provider)}</span></td><td>${usd(p.amount)} <span class="muted">${esc(p.currency)}</span></td><td class="mono">${esc(p.who || '—')}</td><td class="muted">${esc(p.status || '')}</td><td class="mono muted" style="font-size:11px">${esc(p.id || '—')}</td></tr>`).join('');
   const subRows = paidTesters.map((t) =>
     `<tr><td class="mono">${esc(t.name || t.platform_id)}</td><td><span class="pill">${esc(t.subscription_provider || '?')}</span></td><td>${esc((D.TIER[t.tier] || {}).label || t.tier || '—')}</td><td>${esc(D.inferBilling(t))}</td><td class="muted">${ymd(t.access_until)}</td></tr>`).join('');
   const providersDown = (!pay.dodoOk || !pay.moonOk) ? `<p class="muted" style="margin:0 0 10px;font-size:12.5px">${pay.dodoOk ? '' : 'Dodo API unreachable. '}${pay.moonOk ? '' : 'MoonPay API unreachable.'} Showing what's available.</p>` : '';
@@ -165,7 +201,8 @@ async function viewPayments() {
       ${stat('Revenue · all', usd(rev(3650)))}
       ${stat('By provider', `${provSplit.moonpay} <span class="muted">moonpay</span> · ${provSplit.dodo} <span class="muted">dodo</span>${provSplit.loop ? ` · ${provSplit.loop} loop` : ''}`)}
     </div>
-    ${card('Recent payments · live from Dodo + MoonPay', table(['When', 'Provider', 'Amount', 'Who', 'Status'], feed))}
+    ${card('Recent payments · live from Dodo + MoonPay', table(['When', 'Provider', 'Amount', 'Who', 'Status', 'Payment id'], feed)
+      + `<p class="muted" style="margin-top:8px">Test transactions live in the provider's ledger and are not deleted from it. To hide one here, add its payment id to <code>PAYMENTS_EXCLUDE_IDS</code> (comma-separated) in the Vercel env.</p>`)}
     ${card('Active subscriptions', table(['User', 'Provider', 'Plan', 'Billing', 'Renews'], subRows))}`;
   return R.shell({ title: 'pip · admin — payments', active: 'payments', body, updated: new Date() });
 }
@@ -219,6 +256,159 @@ async function viewTrials() {
 // anonymous, so "clicked add-bot" and "started using Pip" are matched at the
 // COHORT level (same 7-day window), not per person. The percentages are
 // directional, not a per-user join.
+// ---- People (CRM) ----------------------------------------------------------
+// One row per PERSON, not per tester. A community joiner who never messaged has
+// no beta_testers row at all, and those unconverted leads are the whole reason
+// this view exists — the Users view can't see them.
+async function viewPeople(filter) {
+  const now = Date.now();
+  const [testers, usage, claims, labels] = await Promise.all([
+    D.loadTesters(), D.loadUsage(90), D.loadAttribution(), D.loadLabels(),
+  ]);
+
+  const key = (p, id) => `${p}:${id}`;
+  const people = new Map();
+  const upsert = (platform, platformId) => {
+    const k = key(platform, platformId);
+    if (!people.has(k)) {
+      people.set(k, {
+        platform, platformId, name: null, source: null, visitorId: null,
+        firstSeen: null, joinedAt: null, msgs: 0, lastActive: null, spend: 0,
+        accessUntil: undefined, paid: false, labels: [], note: null,
+      });
+    }
+    return people.get(k);
+  };
+
+  for (const t of testers) {
+    const p = upsert(t.platform, t.platform_id);
+    p.name = t.name && t.name !== 'auto' && t.name !== 'granted' ? t.name : p.name;
+    p.firstSeen = t.invited_at;
+    p.accessUntil = t.access_until;
+    p.paid = Boolean(t.subscription_provider) && (t.subscription_status || 'active') === 'active';
+    p.tier = t.tier;
+  }
+
+  // Leads: claimed handoffs and community joins. These may have no tester row.
+  for (const c of claims) {
+    if (!c.platform_id) continue; // an add-bot claim identifies a guild, not a person
+    const p = upsert(c.platform, c.platform_id);
+    p.source = c.intent;
+    p.visitorId = c.visitor_id || p.visitorId;
+    p.joinedAt = c.claimed_at;
+    if (!p.name && c.meta && c.meta.name) p.name = c.meta.name;
+  }
+
+  for (const u of usage) {
+    const p = people.get(key(u.platform, String(u.user_id)));
+    if (!p) continue;
+    p.msgs += 1;
+    p.spend += Number(u.cost_usd || 0);
+    if (!p.lastActive || u.created_at > p.lastActive) p.lastActive = u.created_at;
+  }
+
+  for (const l of labels) {
+    const p = people.get(key(l.platform, l.platform_id));
+    if (p) { p.labels = l.labels || []; p.note = l.note; }
+  }
+
+  // Lifecycle stage. Ordered most-advanced first so the badge reads as progress.
+  const stageOf = (p) => {
+    if (p.paid) return 'paid';
+    if (p.msgs === 0) return 'lead';           // arrived, never spoke
+    const lapsed = p.accessUntil && Number.isFinite(new Date(p.accessUntil).getTime())
+      && now > new Date(p.accessUntil).getTime();
+    if (lapsed) return 'lapsed';
+    const days = new Set(usage
+      .filter((u) => String(u.user_id) === p.platformId)
+      .map((u) => ymd(u.created_at)));
+    return days.size >= 2 ? 'returned' : 'activated';
+  };
+
+  let rows = [...people.values()].map((p) => ({ ...p, stage: stageOf(p) }));
+  if (FOUNDER_KEYS.size) rows = rows.filter((p) => !FOUNDER_KEYS.has(key(p.platform, p.platformId)));
+  if (filter) rows = rows.filter((p) => p.stage === filter || p.labels.includes(filter));
+
+  // Leads first (they need action), then by recency.
+  const rank = { lead: 0, activated: 1, returned: 2, lapsed: 3, paid: 4 };
+  rows.sort((a, b) =>
+    rank[a.stage] - rank[b.stage] ||
+    String(b.lastActive || b.joinedAt || b.firstSeen || '').localeCompare(String(a.lastActive || a.joinedAt || a.firstSeen || '')));
+
+  const counts = rows.reduce((m, p) => ({ ...m, [p.stage]: (m[p.stage] || 0) + 1 }), {});
+  const SOURCE_LABEL = {
+    telegram: 'site → telegram', discord_bot: 'site → add-bot', discord_community: 'community join',
+  };
+
+  const body = rows.map((p) => {
+    const id = `${p.platform}:${p.platformId}`;
+    const lapsed = p.stage === 'lapsed';
+    const until = p.accessUntil
+      ? (Number.isFinite(new Date(p.accessUntil).getTime()) ? ymd(p.accessUntil) : 'never')
+      : '—';
+    return `<tr>
+      <td>
+        <div><strong>${esc(p.name || shortId(p.platformId))}</strong></div>
+        <div class="muted mono" style="font-size:11px">${esc(id)}</div>
+      </td>
+      <td><span class="tag ${p.stage === 'paid' ? 'paid' : p.stage === 'lapsed' ? 'lapsed' : p.stage === 'lead' ? 'guest' : 'trial'}">${p.stage}</span></td>
+      <td class="muted">${esc(SOURCE_LABEL[p.source] || '—')}${p.visitorId ? `<div class="mono" style="font-size:11px">visitor ${esc(p.visitorId.slice(0, 8))}…</div>` : ''}</td>
+      <td class="mono">${p.msgs}</td>
+      <td class="muted">${p.lastActive ? ago(p.lastActive) : '—'}</td>
+      <td class="mono ${lapsed ? 'bad' : ''}">${until}</td>
+      <td>
+        ${p.labels.map((l) => `<span class="pill">${esc(l)}</span>`).join(' ') || '<span class="muted">—</span>'}
+        <form method="POST" action="/people/label" style="display:inline-flex;gap:4px;margin-top:4px">
+          <input type="hidden" name="platform" value="${esc(p.platform)}">
+          <input type="hidden" name="id" value="${esc(p.platformId)}">
+          <input name="labels" value="${esc(p.labels.join(', '))}" placeholder="tag, tag" style="width:130px;font-size:11px">
+          <button class="btn" type="submit" style="font-size:11px">save</button>
+        </form>
+      </td>
+      <td style="white-space:nowrap">
+        ${accessForm(p, 7, '+7d')}
+        ${accessForm(p, 0, 'revoke')}
+      </td>
+    </tr>`;
+  }).join('');
+
+  const chip = (label, value) =>
+    `<a href="/people${value ? `?filter=${encodeURIComponent(value)}` : ''}" class="pill ${filter === value ? 'on' : ''}">${esc(label)}</a>`;
+
+  return R.shell({
+    title: 'pip · admin — people', active: 'people',
+    body: `
+      <div class="grid">
+        ${stat('People', rows.length, 'excludes founder')}
+        ${stat('Leads', counts.lead || 0, 'arrived, never messaged')}
+        ${stat('Activated', (counts.activated || 0) + (counts.returned || 0), `${counts.returned || 0} came back another day`)}
+        ${stat('Paid', counts.paid || 0, `${counts.lapsed || 0} lapsed`)}
+      </div>
+      ${card('Filter', `<div style="display:flex;gap:6px;flex-wrap:wrap">
+        ${chip('all', '')}${chip('leads', 'lead')}${chip('activated', 'activated')}${chip('returned', 'returned')}${chip('lapsed', 'lapsed')}${chip('paid', 'paid')}
+      </div>`)}
+      ${card('People', table(
+        ['Person', 'Stage', 'Source', 'Msgs', 'Last active', 'Access until', 'Labels', 'Access'],
+        body,
+      ))}
+      <div class="card"><p class="muted">
+        A <strong>lead</strong> arrived but never sent a message. Source is only known where the
+        handoff could carry a token: the community invite takes no per-visitor parameter, so those
+        joins show as "community join" with no visitor. Extensions run from now, not from the old
+        expiry, and never consume the user's tweet-for-a-week grant.
+      </p></div>`,
+  });
+}
+
+function accessForm(p, days, label) {
+  return `<form method="POST" action="/people/access" style="display:inline">
+    <input type="hidden" name="platform" value="${esc(p.platform)}">
+    <input type="hidden" name="id" value="${esc(p.platformId)}">
+    <input type="hidden" name="days" value="${days}">
+    <button class="btn" type="submit" style="font-size:11px">${label}</button>
+  </form>`;
+}
+
 async function viewFunnel() {
   const days = 7;
   const [events, testers, usage] = await Promise.all([

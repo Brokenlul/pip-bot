@@ -37,6 +37,39 @@ export async function ensureGuild(guildId: string, guildName?: string): Promise<
     .throwOnError();
 }
 
+/**
+ * Stamp the moment Pip was added to a server. ensureGuild only ever fires on a
+ * first MESSAGE, so without this an install that nobody follows up on is
+ * invisible: we could not tell "added and ignored" from "never added".
+ */
+export async function markGuildInstalled(guildId: string, guildName?: string): Promise<void> {
+  const db = getDb();
+  if (!db) return;
+  await db
+    .from('guilds')
+    .upsert(
+      {
+        id: guildId,
+        name: guildName ?? null,
+        installed_at: new Date().toISOString(),
+        removed_at: null, // a re-add clears an earlier removal
+      },
+      { onConflict: 'id' },
+    )
+    .throwOnError();
+}
+
+/** Pip was kicked or the server was deleted. Keeps the row for funnel history. */
+export async function markGuildRemoved(guildId: string): Promise<void> {
+  const db = getDb();
+  if (!db) return;
+  await db
+    .from('guilds')
+    .update({ removed_at: new Date().toISOString() })
+    .eq('id', guildId)
+    .throwOnError();
+}
+
 export async function lookupCache(
   guildId: string,
   userId: string,

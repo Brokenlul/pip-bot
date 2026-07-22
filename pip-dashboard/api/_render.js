@@ -82,6 +82,7 @@ const p95 = (a) => { if (!a.length) return null; const s = [...a].sort((x, y) =>
 const NAV = [
   ['overview', 'Overview'],
   ['funnel', 'Funnel'],
+  ['people', 'People'],
   ['payments', 'Payments'],
   ['trials', 'Trials'],
   ['activity', 'Activity'],
@@ -141,6 +142,10 @@ input,button{font:15px inherit;font-family:-apple-system,BlinkMacSystemFont,'Seg
 .input{padding:10px 12px;border:1px solid var(--hair);border-radius:10px;outline:none;width:100%;background:#fff}.input:focus{border-color:var(--green)}
 .btn{background:var(--green);color:#fff;border:none;padding:11px 18px;border-radius:10px;font-weight:600;cursor:pointer}.btn:hover{background:#0e8a4c}
 .pill{display:inline-block;font:11px ui-monospace,monospace;color:var(--sage);border:1px solid var(--hair);border-radius:99px;padding:2px 8px;margin-right:6px}
+a.pill{text-decoration:none}
+a.pill.on{background:var(--sage);color:#fff;border-color:var(--sage)}
+/* CRM row controls: inputs and buttons sit inline inside table cells. */
+input[name="labels"]{background:transparent;border:1px solid var(--hair);border-radius:6px;color:inherit;padding:2px 6px;font:11px ui-monospace,monospace}
 .trunc{max-width:400px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 @media(max-width:820px){.grid3,.grid4,.grid2{grid-template-columns:1fr 1fr}.trunc{max-width:220px}}@media(max-width:520px){.grid3,.grid4,.grid2{grid-template-columns:1fr}}
 `;

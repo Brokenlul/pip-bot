@@ -10,6 +10,11 @@ import {
   PartialMessageReaction,
   User,
   PartialUser,
+  Guild,
+  GuildMember,
+  ChannelType,
+  PermissionsBitField,
+  type TextChannel,
 } from 'discord.js';
 import { getConfig } from '../config.js';
 import {
@@ -23,6 +28,9 @@ import {
 import { betaGate, setFounderNotifier, recordFeedback, type GateDecision } from '../beta/guardrails.js';
 import { fmtUtcHm } from '../core/util.js';
 import { registerPusher } from '../core/push.js';
+import { markGuildInstalled, markGuildRemoved } from '../memory/store.js';
+import { recordCommunityJoin } from '../memory/attribution.js';
+import { registerGuildGreeter } from '../core/guild-greeter.js';
 
 // Pip is @-mention / DM only — no slash command. Servers: @-mention in an
 // allowed channel; DMs: just message it.
@@ -38,6 +46,60 @@ const PIP_GREEN = 0x12a15a;
 // Negative/error state — Clay (#C25B37), the brand's only non-accent data color.
 const PIP_CLAY = 0xc25b37;
 const MAX_QUESTION_LEN = 1000;
+
+// Outbound welcome-DM rate cap. A raid on the community server must not turn
+// Pip into a mass-DM bot; leads are still recorded when this trips.
+const JOIN_DM_MAX = 20;
+const JOIN_DM_WINDOW_MS = 60_000;
+let joinDmTimes: number[] = [];
+
+// Posted once when Pip is added to a server. Static text, no model call, so
+// greeting every install costs nothing. Leads with the @-mention rule because
+// that is the single thing that makes an installed Pip actually usable.
+// Posted ONCE into a server, and only after nobody has pinged Pip during the
+// grace period (see core/guild-greeter.ts). Deliberately short: this is an
+// unprompted message in someone else's server, so it introduces Pip and gets
+// out of the way rather than dumping a feature list nobody asked for.
+const GUILD_WELCOME = [
+  "Hi, I'm **Pip** 🌱 an AI markets analyst.",
+  '',
+  "**@mention me** in any channel and ask away. Live funding and open interest, spot prices, macro, token scans, equities. Drop a chart screenshot and I'll read that too.",
+  '',
+  "Try `@Pip what's BTC funding right now?` Not financial advice.",
+].join('\n');
+
+// One-time DM to anyone joining the main Pip community server. Every joiner is
+// a lead, and this is the only moment we can reach them directly.
+export const COMMUNITY_WELCOME = [
+  "Hi, I'm **Pip** 🌱 welcome to my server.",
+  '',
+  "I'm an AI markets analyst. Whatever you're trading, I'll give you the sharpest read I can on it.",
+  '',
+  '**How to use me:**',
+  '• **DM me right here.** Just message me, no @mention needed. Easiest way to work.',
+  '• **In the server.** @mention me in any channel, like <#1522871958268809288>',
+  '• **On Telegram:** https://t.me/pipinvestbot',
+  '• **Add me to your own server:** https://pipinvest.xyz',
+  '',
+  'Ask me anything and get your work done:',
+  "• `what's BTC funding right now?` for live funding, open interest, positioning",
+  '• `scan <contract address>` to check if a shitcoin is safe to touch: holders, LP, insiders, honeypot',
+  '• `next CPI print?` for macro, FOMC, and what it means for risk',
+  '• drop a chart screenshot and I\'ll read the structure off it',
+  '• tell me a trade thesis with your entry, timeframe and invalidation, and I\'ll pick holes in it',
+  '',
+  "You're on a **free 7-day trial** from your first question. Not financial advice, and I never give buy/sell calls, the trade is always yours.",
+].join('\n');
+
+// Discord has no /start, so a first-ever DM used to get straight into an answer
+// with no introduction. Sent once, on the message that enrolls them.
+const DM_WELCOME = [
+  "Hey 🌱 I'm **Pip**, an AI markets analyst. Whatever you're trading, I'll give you the sharpest read I can on it.",
+  '',
+  'Live funding and open interest, spot prices, macro (FOMC/CPI), token security scans, equities fundamentals, fused into one honest, two-sided read. Drop a chart screenshot and I\'ll read that too.',
+  '',
+  "You're on a **free 7-day trial** starting now. Let me take a look at your question 👇",
+].join('\n');
 
 // Vision limits. The Anthropic API caps a single image at ~5MB; keep a few
 // per message so a user can drop an HTF + LTF pair. Anything larger/other is
@@ -68,6 +130,8 @@ export class DiscordAdapter implements PlatformAdapter {
     );
     // Price-alert pushes (src/core/alert-poller.ts) route through the same DM path.
     registerPusher('discord', (userId, text) => this.dmUser(userId, text));
+    // Deferred server introductions (src/core/guild-greeter.ts) post through us.
+    registerGuildGreeter((guildId) => this.greetGuild(guildId));
 
     const client = new Client({
       intents: [
@@ -78,6 +142,9 @@ export class DiscordAdapter implements PlatformAdapter {
         GatewayIntentBits.MessageContent,
         // 👍/👎 feedback on Pip's answers (the pilot Quality metric).
         GatewayIntentBits.GuildMessageReactions,
+        // Privileged: enable "Server Members Intent" in the Dev Portal too, or
+        // GuildMemberAdd never fires and community joiners are never welcomed.
+        GatewayIntentBits.GuildMembers,
         GatewayIntentBits.DirectMessageReactions,
       ],
       // Partials so DM messages AND reactions on uncached messages still fire.
@@ -98,6 +165,30 @@ export class DiscordAdapter implements PlatformAdapter {
     client.on(Events.MessageReactionAdd, (reaction, user) => {
       this.handleReaction(reaction, user).catch((e) => {
         console.error('[discord] reaction handler crashed:', e);
+      });
+    });
+
+    // Pip landing in a server is a funnel step we were completely blind to:
+    // guilds rows are written by ensureGuild on the FIRST MESSAGE, so a server
+    // that installed Pip and never mentioned it left no trace anywhere.
+    client.on(Events.GuildCreate, (guild) => {
+      this.handleGuildJoin(guild).catch((e) => {
+        console.error('[discord] guild join handler crashed:', e);
+      });
+    });
+
+    client.on(Events.GuildDelete, (guild) => {
+      console.log(`[discord] removed from guild ${guild.id} (${guild.name ?? 'unknown'})`);
+      void markGuildRemoved(guild.id).catch((e) =>
+        console.warn(`[discord] markGuildRemoved: ${(e as Error).message}`),
+      );
+    });
+
+    // Someone joined the main Pip community server. Every joiner is a lead, so
+    // record it and send the one-time welcome DM.
+    client.on(Events.GuildMemberAdd, (member) => {
+      this.handleCommunityJoin(member).catch((e) => {
+        console.error('[discord] member join handler crashed:', e);
       });
     });
 
@@ -145,6 +236,128 @@ export class DiscordAdapter implements PlatformAdapter {
    * DM a user. Throws if the send fails — callers decide what that means, so a
    * dropped push can't look like a delivered one.
    */
+  /**
+   * Pip was added to a server. Record the install (the funnel step we used to
+   * miss entirely) and greet the room so the person who added it knows how to
+   * actually use it — an installed bot nobody @-mentions is a silent churn.
+   */
+  private async handleGuildJoin(guild: Guild): Promise<void> {
+    console.log(`[discord] added to guild ${guild.id} (${guild.name})`);
+    // Record the install and nothing else. Pip stays quiet and waits to be
+    // pinged; the deferred greeter (core/guild-greeter.ts) only speaks up if
+    // the server never does. Members are never DMed on an install.
+    await markGuildInstalled(guild.id, guild.name).catch((e) =>
+      console.warn(`[discord] markGuildInstalled: ${(e as Error).message}`),
+    );
+  }
+
+  /**
+   * Post the one-time introduction into a server that never pinged Pip.
+   * Returns false when there's nowhere it can post, so the caller can retire
+   * the attempt instead of retrying forever.
+   */
+  async greetGuild(guildId: string): Promise<boolean> {
+    const guild = this.client?.guilds.cache.get(guildId);
+    if (!guild) return false;
+    const channel = this.greetableChannel(guild);
+    if (!channel) {
+      console.log(`[discord] no greetable channel in ${guildId}`);
+      return false;
+    }
+    try {
+      await channel.send(GUILD_WELCOME);
+      console.log(`[discord] introduced Pip in ${guildId} #${channel.name}`);
+      return true;
+    } catch (e) {
+      console.warn(`[discord] guild greeting failed in ${guildId}: ${(e as Error).message}`);
+      return false;
+    }
+  }
+
+  /**
+   * A join on the main community server. Records the lead, then DMs the joiner
+   * once.
+   *
+   * Scoped to PIP_COMMUNITY_GUILD_ID on purpose: welcome-DM-ing everyone who
+   * joins any server Pip happens to sit in is the textbook Discord spam
+   * pattern. Unset means this does nothing at all.
+   */
+  private async handleCommunityJoin(member: GuildMember): Promise<void> {
+    const communityId = getConfig().PIP_COMMUNITY_GUILD_ID;
+    if (!communityId || member.guild.id !== communityId) return;
+    if (member.user.bot) return;
+
+    void recordCommunityJoin(member.guild.id, member.id, member.user.username).catch((e) =>
+      console.warn(`[discord] recordCommunityJoin: ${(e as Error).message}`),
+    );
+
+    // Raid guard. A join flood must never turn into a DM flood — that is what
+    // gets a bot reported and banned. The lead is still recorded above; only
+    // the outbound DM is dropped.
+    const now = Date.now();
+    joinDmTimes = joinDmTimes.filter((t) => now - t < JOIN_DM_WINDOW_MS);
+    if (joinDmTimes.length >= JOIN_DM_MAX) {
+      console.warn(`[discord] join-DM rate cap hit (${JOIN_DM_MAX}/${JOIN_DM_WINDOW_MS}ms), skipping DM for ${member.id}`);
+      return;
+    }
+    joinDmTimes.push(now);
+
+    try {
+      await member.send(COMMUNITY_WELCOME);
+      console.log(`[discord] welcomed community joiner ${member.id}`);
+    } catch (e) {
+      // Most commonly "Cannot send messages to this user": DMs closed, which is
+      // normal and not an error worth surfacing.
+      console.log(`[discord] join DM not delivered for ${member.id}: ${(e as Error).message}`);
+    }
+  }
+
+  /**
+   * The channel a server would most plausibly want to talk to Pip in.
+   *
+   * Ranked by name, because the system channel is often a join-spam/audit
+   * channel nobody reads, and channel position is a poor proxy for "where
+   * conversation happens". Trading rooms beat general chat, general chat beats
+   * the system channel, and anything sendable beats staying silent. Permissions
+   * are checked up front so we never fire a send we know will 403.
+   */
+  private greetableChannel(guild: Guild): TextChannel | null {
+    const me = guild.members.me;
+    if (!me) return null;
+    const canSend = (c: TextChannel) =>
+      c.permissionsFor(me)?.has([
+        PermissionsBitField.Flags.ViewChannel,
+        PermissionsBitField.Flags.SendMessages,
+      ]) ?? false;
+
+    const score = (name: string): number => {
+      const n = name.toLowerCase();
+      // A channel named for the bot itself is the most explicit invitation
+      // there is (#ask-pip, #pip-chat), so it outranks even a trading room.
+      if (/(ask-?pip|pip-?(chat|bot|talk))/.test(n)) return 5;
+      if (/(trading|trades|markets?|ta|charts?|alpha|degen)/.test(n)) return 4;
+      if (/(general|chat|lounge|main|talk)/.test(n)) return 3;
+      if (/(bot|commands?|spam)/.test(n)) return 2; // where bots are tolerated
+      // Places an unprompted bot post is unwelcome or will be missed.
+      if (/(announce|rules|welcome|log|audit|mod|admin|ticket)/.test(n)) return 0;
+      return 1;
+    };
+
+    const candidates = [...guild.channels.cache.values()]
+      .filter((c): c is TextChannel => c.type === ChannelType.GuildText && canSend(c as TextChannel))
+      .map((c) => ({ c, s: score(c.name) }))
+      .filter((x) => x.s > 0)
+      .sort((a, b) => b.s - a.s || a.c.rawPosition - b.c.rawPosition);
+
+    const best = candidates[0];
+    if (best) return best.c;
+
+    // Everything scored zero (a rules/announcements-only server). The system
+    // channel is a better last resort than silence, if we can post there.
+    const system = guild.systemChannel;
+    return system && canSend(system) ? system : null;
+  }
+
   private async dmUser(userId: string, text: string): Promise<void> {
     const client = this.client;
     if (!client) throw new Error('Discord client not started');
@@ -261,11 +474,22 @@ export class DiscordAdapter implements PlatformAdapter {
         receivedAt: new Date(),
       };
 
-      // Beta gate — allowlist / caps / kill-switch — BEFORE any LLM call.
+      // Cost + access gate — caps / kill-switch — BEFORE any LLM call.
       const gate = await betaGate(msg);
       if (!gate.allow) {
         if (!gate.silent && gate.replyText) await this.send(message, gate.replyText);
         return;
+      }
+
+      // First message ever from this person in a DM: introduce Pip before
+      // answering, since Discord has no /start to carry an introduction. Server
+      // arrivals are greeted by GUILD_WELCOME on install instead, so greeting
+      // them again here would be the second welcome in the same channel.
+      // Best-effort: a failed greeting must not cost them their answer.
+      if (gate.enrolled && isDM) {
+        await this.send(message, DM_WELCOME).catch((e) =>
+          console.warn(`[discord] DM welcome failed: ${(e as Error).message}`),
+        );
       }
 
       // A bare mention with neither text nor an image → nudge. With an image we

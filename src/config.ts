@@ -78,6 +78,12 @@ const Schema = z
     // Payment/upgrade link shown when a user's trial (and their one tweet
     // extension) lapses. Optional — without it Pip says paid access is coming.
     BETA_UPGRADE_URL: z.string().optional(),
+    // The main Pip community server. Joiners there get a one-time welcome DM
+    // and are recorded as leads. Deliberately opt-in by id rather than "any
+    // server": DM-ing everyone who joins ANY server Pip sits in would be
+    // indistinguishable from a spam bot and is a fast route to being banned.
+    // Requires the SERVER MEMBERS privileged intent in the Discord dev portal.
+    PIP_COMMUNITY_GUILD_ID: z.string().optional(),
   })
   .superRefine((cfg, ctx) => {
     // A lone Discord token or app id means the adapter can't start — flag it

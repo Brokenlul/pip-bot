@@ -12,6 +12,7 @@ import {
 } from './config.js';
 import { renderReplyText } from './core/formatter.js';
 import { startAlertPoller } from './core/alert-poller.js';
+import { startGuildGreeter } from './core/guild-greeter.js';
 
 async function main(): Promise<void> {
   // Validate config at boot
@@ -58,6 +59,9 @@ async function main(): Promise<void> {
   // Push price alerts (set_price_alert) — only meaningful once at least one
   // adapter has registered its pusher, which happens synchronously in start().
   if (memoryEnabled()) startAlertPoller();
+  // Introduce Pip in servers that installed it and then never pinged it. Same
+  // ordering requirement as the pusher above: the adapter registers in start().
+  if (memoryEnabled()) startGuildGreeter();
 
   const shutdown = async (sig: NodeJS.Signals) => {
     console.log(`[pip] received ${sig}, draining ${inFlight.size} in-flight answer(s)`);
