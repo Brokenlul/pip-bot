@@ -120,7 +120,9 @@
   // outright. Flip to true only once DISCORD_REDIRECT is listed under
   // OAuth2 → Redirects for application 1521437096294744216.
   // Telegram attribution below needs no such registration and is always on.
-  var ADD_BOT_ATTRIBUTION = false;
+  // Enabled 2026-07-24: redirect_uri registered under OAuth2 -> Redirects for
+  // application 1521437096294744216 (verified in the dev portal).
+  var ADD_BOT_ATTRIBUTION = true;
 
   function attribute(el, href, name) {
     // Always rebuild from the pristine href, so a second click on the same
