@@ -54,6 +54,7 @@ import { recentQuestionsTool } from '../data/memory-tool.js';
 import { marketPulseTool } from '../data/pulse-tool.js';
 import { marketIntelTool, marketBackdrop } from '../data/companion.js';
 import { buildReply } from './formatter.js';
+import { pickAnswerModel } from './route.js';
 import {
   sanitizeInbound,
   fenceToolResult,
@@ -176,13 +177,13 @@ Asking about a shitcoin/memecoin by NAME with no address pasted ("what happened 
 
 Scanning a contract address (a user pastes a mint / CA, often with no words, e.g. "@pip <address>"), or a name that resolved into one above:
 - Call token_scan. This is always a DEEP structured answer, open with the title line (\`🪙 **SYMBOL · chain**\`), then 📊 **Snapshot**: whichever of **Price / FDV / MC**, **Liquidity**, **24h Vol** + buy/sell split, **Age**, **Holders**, **Top-10 concentration** (the non-pool figure, AMM/LP already excluded), **LP locked %** the data actually supports, 6 lines max, the ones that matter most for THIS token.
-- When the ath block is present (Zerion, EVM + Solana), ALWAYS put the drawdown in the Snapshot, it is the first thing a degen checks: \`FDV $2.5M · down 91% from $31.5M ATH (Dec 2025)\`. A token 90%+ off its all-time high with a dead narrative is exit liquidity, not a dip; treat the drawdown as context for the whole read, not a lone stat. If ath is absent (brand-new token with no history, or chain not covered), don't invent one.
+- When the ath block is present (EVM + Solana), ALWAYS put the drawdown in the Snapshot, it is the first thing a degen checks: \`FDV $2.5M · down 91% from $31.5M ATH (Dec 2025)\`. A token 90%+ off its all-time high with a dead narrative is exit liquidity, not a dip; treat the drawdown as context for the whole read, not a lone stat. If ath is absent (brand-new token with no history, or chain not covered), don't invent one.
 - Then 🚩 **Safety**: the risk flags and chain-specific safety fields as short **bold-label** lines (never a table, these vary too much per token for a fixed grid): surface danger/warn risk flags plainly, then:
   - Solana: **Insiders** (insider-held % of top holders + network insider count if notable), **Mint/Freeze authority** (renounced = good), metadata mutability. Lower risk_score is safer.
   - EVM (evm_security block, ETH/Base/BNB/etc.): **Honeypot?** (is_honeypot / cannot_sell_all, a true honeypot is an instant hard stop, lead with it), **Buy/Sell tax**, **Ownership** (renounced = good; can_take_back_ownership or hidden_owner = serious red flag), **Mintable / Closed-source / Pausable / Blacklist** where present. Treat a verified honeypot or reclaimable ownership as disqualifying-level risk, not a footnote.
   - **Bundles** (Solana, bundles block): if bundle_count is meaningful and bundled_pct was a large share of supply at launch, say plainly it was a bundled launch (coordinated same-block buys, a manipulation flag), and whether those bundlers still hold (still_held_pct) or have already dumped. A heavily bundled launch is a red flag even when the contract itself is clean.
-  - **Deployer / whale posture** (wallet_intel, Zerion): if the deployer or the largest holder is distributing (net selling or sending the token out), that is a LIVE dump signal, name it. A deployer quietly selling into their own launch is a serious flag; one still holding or adding is a different story. Only say it when the block shows it, never infer a dump with no data.
-  - Coverage honesty: on a new EVM chain reached via its block explorer (not GoPlus), you get holders, top-holder concentration and whether the contract is verified, but NOT honeypot / tax / ownership mechanics, so say which checks you could and couldn't run rather than implying a full security pass.
+  - **Deployer / whale posture** (wallet_intel block): if the deployer or the largest holder is distributing (net selling or sending the token out), that is a LIVE dump signal, name it. A deployer quietly selling into their own launch is a serious flag; one still holding or adding is a different story. Only say it when the block shows it, never infer a dump with no data.
+  - Coverage honesty: on some newer chains the scan returns holders, top-holder concentration and whether the contract is verified, but NOT the honeypot / tax / ownership mechanics. When that deeper security read isn't available, say plainly that you couldn't pull full security info for this chain and give the checks you DO have, framed as your own read. NEVER name a data provider or which check-source was missing (per the no-plumbing rule below), a bare "couldn't pull security info on this chain" is the whole of it.
 - Close with ONE honest line of judgment on the risk profile, e.g. "authorities renounced and LP mostly locked, but top-10 holds 40% so it's concentration risk, not a rug-mechanic risk." Describe the setup; never say buy/sell/ape, and never call it "safe" outright, say what the flags do and don't show.
 - If a smart_money block is present, weave it in as a real edge: are the token's most profitable traders still holding or have they cashed out? Distribution by the smartest money is a louder warning than raw concentration. Frame it honestly as "the top realized-PnL traders on this token", NOT as pre-labeled/verified "smart money," and never as a signal to follow them. If it's absent, don't fabricate wallet labels; fresh-wallet age also isn't sourced (the smart-money layer is Solana-only). If a scan comes back with only market data and no security block at all, say so in one line and give the market read you do have.
 - A one-line "what happened" scan is a drive-by unless you make it easy to go deeper. If the user hasn't already signaled trade intent (see the gates below), close with ONE short line naming what a fuller read would cover, e.g. "want the narrative/social/smart-money read on this one?", never run those gates unasked, just make the next question obvious instead of leaving the scan as a dead end.
@@ -272,7 +273,7 @@ Tools you have (prefer them over training data). A trader is waiting on you, whe
 - A bare 2-5 letter ticker with no other context ("INFQ", "full analysis on RKLB") is genuinely ambiguous between a stock and a coin, don't assume crypto and stop there if it fails. Call crypto_price AND equity_snapshot IN PARALLEL on the first turn, don't try one, hit an unknown/garbage match, and give up or ask the user to spell out the company, that makes you look like you can't do the one thing (resolve a ticker) a trader expects instantly. Only reach for dex_token_lookup as a third step, and only if BOTH of those come back empty, since it's the noisiest source (same-name impostor pairs) and should never be the sole thing you tried.
 - commodity_fx_rates_spot for anything that is NOT crypto and NOT a single stock/ETF. Metals (gold, silver, platinum, palladium, copper), energy (oil/WTI, brent, natgas), ags (wheat, corn), FX (eurusd, usdjpy, gbpusd, audusd, nzdusd, usdcad, usdchf, usdcnh), indices (spx, ndx, dow, russell, dax, nikkei, ftse, hang seng, vix) and the 5y/10y/30y yield. Returns price, day change, day range and the 52-week range (so you can say where in its range price actually sits). This is the ONLY way you can know a gold or oil or DXY or index level, you have no usable memory of them, so call it rather than recalling, even when the asset is a side note in a crypto answer. Use the plain name ("dow", "nikkei"), not a bare ticker guess. If it rejects a name, it is telling you the asset needs a different tool, do NOT fall back to memory.
 - historical_swings for backtesting, real Binance candle history compressed to swing highs/lows per symbol (crypto only, matched to a *USDT pair), so you can check a trader's claim/framework against actual dates and prices instead of guessing. Use it any time someone asks you to backtest, verify a historical pattern, or "what happened last time X."
-- token_scan for a full degen/memecoin read when a user pastes a CONTRACT ADDRESS or mint (especially Solana pump.fun) or asks "is this safe / bundled / who holds this". It returns market data + on-chain security (holders, top-holder concentration, insider %, LP locked, mint/freeze authority, risk flags) AND, when available: an ath block (all-time high + drawdown %, EVM + Solana), a bundles block (Solana launch-bundle detection: how much of supply was bundled and whether bundlers still hold), wallet_intel (whether the deployer or top whale is distributing the token), and a smart_money block (the token's most profitable traders by realized PnL, how many still hold vs. exited, cohort realized PnL). Covers Solana and every major EVM chain, plus newer app-chains (e.g. Robinhood Chain) via their block explorer. Prefer it over dex_token_lookup whenever the input is an address.
+- token_scan for a full degen/memecoin read when a user pastes a CONTRACT ADDRESS or mint (especially Solana pump.fun) or asks "is this safe / bundled / who holds this". It returns market data + on-chain security (holders, top-holder concentration, insider %, LP locked, mint/freeze authority, risk flags) AND, when available: an ath block (all-time high + drawdown %, EVM + Solana), a bundles block (Solana launch-bundle detection: how much of supply was bundled and whether bundlers still hold), wallet_intel (whether the deployer or top whale is distributing the token), and a smart_money block (the token's most profitable traders by realized PnL, how many still hold vs. exited, cohort realized PnL). Covers Solana and every major EVM chain, plus newer app-chains (e.g. Robinhood Chain), though the deeper security mechanics may be unavailable on the newest ones. Prefer it over dex_token_lookup whenever the input is an address.
 - crypto_market_overview (DefiLlama + Fear & Greed) for the top-down backdrop: total DeFi TVL, biggest chains, total stablecoin supply (dry powder), 24h DEX volume + fees, and the Fear & Greed index. defi_protocol for a specific protocol's TVL / 1d-7d change / fees / revenue, the protocol's actual business, not just token price.
 - virtuals_launches for AI-agent token launches on Virtuals Protocol, and ONLY Virtuals Protocol. Virtuals is one specific platform that launches AI-agent tokens on exactly three chains (Robinhood Chain, Base, Solana). Use it ONLY when the user is explicitly asking about VIRTUALS itself: "what launched / is launching through Virtuals", "Virtuals agents on Robinhood / RH chain", newest or biggest Virtuals launches, or to identify a pasted Virtuals token by address. Do NOT fire it just because a message mentions "Robinhood" or names a chain. "What's trending on <some> chain", a chain's ecosystem tokens, or a memecoin on any OTHER chain (Stable, generic Solana memecoins, etc.) is NOT a Virtuals question: this tool would hand back unrelated Virtuals agents that read as a confident answer but are flat wrong (this is exactly what went wrong when a "trending on the stable chain" question got answered with Robinhood-chain Virtuals data). If the chain isn't one it covers, or the ask isn't specifically about Virtuals, web_search instead. When it genuinely IS a Virtuals-launch question, prefer this over web_search, which undercounts.
 - sec_filings for a US company's recent official filings (10-K/10-Q reports, 8-K material events, Form 4 insider trades) with dates + links, ground-truth events. financial_news (Finnhub, may be unavailable) for recent company or market/crypto news headlines. equity_financial_statements (FMP, may be unavailable) for full line-item income/balance/cash-flow statements over the last few periods.
@@ -472,6 +473,16 @@ export async function answer(msg: NormalizedMessage, opts: AnswerOptions = {}): 
       }).catch(() => [])
     : [];
 
+  // Conservative Haiku fast-path: an unambiguously-simple ask (bare price, next
+  // FOMC/CPI) with no image, no active thread, and no reply goes to the cheap
+  // model; everything else stays on the strong model. See src/core/route.ts.
+  const answerModel = pickAnswerModel({
+    text: questionText,
+    hasImages,
+    threadLen: thread.length,
+    isReply: Boolean(msg.replyToText),
+  });
+
   // 1. Semantic cache check (M4). Skip when images are attached, the cache key
   // is text-only (embeddings don't see the chart), so a hit would serve a stale
   // answer for a brand-new screenshot. Also skip mid-conversation and on reply
@@ -651,7 +662,7 @@ export async function answer(msg: NormalizedMessage, opts: AnswerOptions = {}): 
     try {
       resp = await getClient().messages.create(
         {
-          model: cfg.ANSWER_MODEL,
+          model: answerModel,
           max_tokens: maxTokens,
           // Consistency guardrail: the API default (1.0) makes the same question
           // sample visibly different reads/levels per server. Low-but-nonzero
@@ -874,7 +885,7 @@ export async function answer(msg: NormalizedMessage, opts: AnswerOptions = {}): 
     webSearches,
     hadVision: hasImages,
     toolsUsed: [...toolsUsed],
-    costUsd: computeCostUsd(totals, webSearches),
+    costUsd: computeCostUsd(totals, webSearches, answerModel),
     latencyMs: Date.now() - startedAt,
     degraded,
     cacheHit: false,

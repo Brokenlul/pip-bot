@@ -43,6 +43,10 @@ const Schema = z
   PAUL_API_KEY: z.string().optional(),
 
   ANSWER_MODEL: z.string().default('claude-sonnet-4-6'),
+  // Conservative Haiku fast-path (unlocked 2026-07-24). Answers only
+  // unambiguously-simple asks (bare price, next FOMC/CPI) — see src/core/route.ts.
+  // Set equal to ANSWER_MODEL (or empty) to disable routing entirely.
+  SIMPLE_ANSWER_MODEL: z.string().default('claude-haiku-4-5'),
   // Cheap model for distilling the per-trader learning profile (background,
   // small, throttled). Haiku keeps this near-free.
   PROFILE_MODEL: z.string().default('claude-haiku-4-5'),

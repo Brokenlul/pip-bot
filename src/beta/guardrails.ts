@@ -4,11 +4,17 @@ import { getConfig, betaModeEnabled, csvSet } from '../config.js';
 import { NormalizedMessage } from '../adapters/platform.js';
 import { CAPS } from './caps.js';
 
-// ---- Cost model (Claude Sonnet 4.6 — $/1M tokens) --------------------------
-// Update these if ANSWER_MODEL changes. Cache read is ~0.1x input; cache write
-// ~1.25x. Web search is billed per search (~$10 / 1,000).
-const PRICE = { input: 3, cacheWrite: 3.75, cacheRead: 0.3, output: 15 };
+// ---- Cost model ($/1M tokens) ---------------------------------------------
+// Cache read is ~0.1x input; cache write ~1.25x. Web search is ~$10 / 1,000.
+// Model-aware since the Haiku fast-path (2026-07-24): logging the wrong prices
+// for a Haiku answer would overstate spend and skew the kill-switch.
+const PRICE_SONNET = { input: 3, cacheWrite: 3.75, cacheRead: 0.3, output: 15 };
+const PRICE_HAIKU = { input: 1, cacheWrite: 1.25, cacheRead: 0.1, output: 5 };
 const WEB_SEARCH_USD = 0.01;
+
+function priceFor(model: string | undefined): typeof PRICE_SONNET {
+  return model && /haiku/i.test(model) ? PRICE_HAIKU : PRICE_SONNET;
+}
 
 // Exact-match cache freshness. Short by design: it dedupes a burst of the same
 // question without ever serving a stale price/funding read. The daily bucket in
@@ -22,12 +28,13 @@ export interface UsageTotals {
   output_tokens: number;
 }
 
-export function computeCostUsd(u: UsageTotals, webSearches: number): number {
+export function computeCostUsd(u: UsageTotals, webSearches: number, model?: string): number {
+  const price = priceFor(model);
   const t =
-    u.input_tokens * PRICE.input +
-    u.cache_creation_input_tokens * PRICE.cacheWrite +
-    u.cache_read_input_tokens * PRICE.cacheRead +
-    u.output_tokens * PRICE.output;
+    u.input_tokens * price.input +
+    u.cache_creation_input_tokens * price.cacheWrite +
+    u.cache_read_input_tokens * price.cacheRead +
+    u.output_tokens * price.output;
   return t / 1e6 + webSearches * WEB_SEARCH_USD;
 }
 
