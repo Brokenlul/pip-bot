@@ -18,9 +18,9 @@ export const CAPS = {
   degradeAtFraction: 0.8,
   alertFractions: [0.5, 0.8, 1.0] as const,
   perRequest: {
-    maxToolCalls: 5, // stop runaway agent fan-out
+    maxToolCalls: 7, // bumped 5→7 (2026-07-24) — shitcoin deep read = scan + 2 web_searches (narrative/deployer) + follow-up
     maxLoopTurns: 3, // #1 silent cost bug: runaway loops
-    maxTokens: 1100, // bumped from 700 (2026-07-13) — sectioned deep reads were truncating mid-section, e.g. a bare header with no content under it
+    maxTokens: 1500, // bumped 1100→1500 (2026-07-24) — two-playbook shitcoin reads (ATH + gates + safety + bundles + wallet intel) were truncating at 1100
     degradeMaxTokens: 400, // even tighter once degraded
   },
 } as const;

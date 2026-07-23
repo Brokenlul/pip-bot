@@ -1,7 +1,9 @@
 import { z } from 'zod';
 import { Tool, zValidator } from './registry.js';
 import { makeCache, withRetry, fetchWithTimeout } from '../core/util.js';
-import { getConfig, solanaTrackerEnabled } from '../config.js';
+import { getConfig, solanaTrackerEnabled, zerionEnabled } from '../config.js';
+import { fetchZerionIntel, type ZerionAth, type ZerionWalletFlow } from './zerion.js';
+import { fetchBlockscoutSecurity, blockscoutHost, type BlockscoutSecurity } from './blockscout.js';
 
 /**
  * Memecoin / degen "scan" tool — a Rick-style read on a contract address.
@@ -76,6 +78,18 @@ interface Output {
   evm_security: EvmSecurity | null;
   // Smart-money proxy (Solana Tracker — only when SOLANA_TRACKER_API_KEY set)
   smart_money: SmartMoney | null;
+  // ATH / drawdown (Zerion fungible charts — EVM + Solana) — null when unavailable
+  ath: ZerionAth | null;
+  // Launch-bundle detection (Solana Tracker) — Solana only
+  bundles: Bundles | null;
+  // Deployer / top-whale posture toward this token (Zerion) — is either dumping
+  wallet_intel: { deployer: ZerionWalletFlow | null; whale: ZerionWalletFlow | null } | null;
+}
+
+interface Bundles {
+  bundle_count: number; // number of bundler wallets detected
+  bundled_pct: number; // % of supply bundled at launch
+  still_held_pct: number; // % of supply bundlers still hold now
 }
 
 interface EvmSecurity {
@@ -163,6 +177,7 @@ interface RcReport {
   score_normalised?: number;
   totalHolders?: number;
   rugged?: boolean;
+  creator?: string; // token creator / deployer wallet — feeds Zerion intel
   graphInsidersDetected?: number;
   knownAccounts?: Record<string, { name?: string; type?: string }>;
   markets?: { lp?: { lpLockedPct?: number; baseUSD?: number; quoteUSD?: number } }[];
@@ -211,6 +226,17 @@ function mapTopHolders(rc: RcReport): {
   return { top: nonPool.slice(0, 10), concentration, insiderPct };
 }
 
+/** First non-pool top holder's wallet (Solana) — the whale for Zerion intel. */
+function firstNonPoolRc(rc: RcReport | null): string | null {
+  const known = rc?.knownAccounts ?? {};
+  for (const h of rc?.topHolders ?? []) {
+    const meta = known[h.address] ?? known[h.owner];
+    const isPool = meta ? POOL_TYPE.test(meta.type ?? '') : false;
+    if (!isPool && h.owner) return h.owner;
+  }
+  return null;
+}
+
 // ---- GoPlus: EVM token security (ETH / Base / BNB / …) -------------------
 
 // DexScreener chainId → GoPlus numeric chain id.
@@ -235,6 +261,7 @@ const GOPLUS_PROBE = ['1', '56', '8453', '42161', '137'];
 const DEAD_OWNERS = new Set(['', '0x0000000000000000000000000000000000000000', '0x000000000000000000000000000000000000dead']);
 
 interface GoPlusHolder {
+  address?: string;
   percent?: string;
   is_locked?: number;
   tag?: string;
@@ -259,6 +286,7 @@ interface GoPlusResult {
   transfer_pausable?: string;
   is_blacklisted?: string;
   trading_cooldown?: string;
+  creator_address?: string;
   holders?: GoPlusHolder[];
   lp_holders?: GoPlusHolder[];
 }
@@ -367,6 +395,19 @@ function mapGoPlus(r: GoPlusResult, chainId: string, address: string): {
   };
 }
 
+/**
+ * First real (non-contract) holder's address (EVM/GoPlus) — the whale for Zerion
+ * intel. Skips ALL contracts (LP pools, routers, bridges), not just tagged ones:
+ * a contract's "flow" is meaningless as a dump signal; we want an EOA holder.
+ */
+function firstNonPoolGoPlus(r: GoPlusResult | undefined): string | null {
+  for (const h of r?.holders ?? []) {
+    if (h.is_contract || POOL_TYPE.test(h.tag ?? '')) continue;
+    if (h.address) return h.address;
+  }
+  return null;
+}
+
 // ---- Solana Tracker: smart-money proxy (top traders by PnL) --------------
 
 function num(v: unknown): number | null {
@@ -431,6 +472,33 @@ async function fetchSmartMoney(mint: string): Promise<SmartMoney | null> {
   };
 }
 
+// ---- Solana Tracker: launch-bundle detection -----------------------------
+
+interface StBundlers {
+  total?: number; // number of bundler wallets
+  percentage?: number; // % of supply bundlers currently hold (already percent units)
+  initialPercentage?: number; // % of supply bundled at launch
+}
+
+async function fetchBundlers(mint: string): Promise<Bundles | null> {
+  const key = getConfig().SOLANA_TRACKER_API_KEY;
+  if (!key) return null;
+  const url = `https://data.solanatracker.io/tokens/${encodeURIComponent(mint)}/bundlers`;
+  const res = await fetchWithTimeout(url, { headers: { 'x-api-key': key } }, 10_000);
+  if (res.status === 401 || res.status === 402 || res.status === 429 || res.status === 404) {
+    return null; // not on plan / not found — degrade quietly
+  }
+  if (!res.ok) throw new Error(`solana-tracker bundlers ${res.status}`);
+  const raw = (await res.json()) as StBundlers;
+  const count = num(raw.total);
+  if (count == null || count === 0) return null;
+  return {
+    bundle_count: count,
+    bundled_pct: round2(num(raw.initialPercentage) ?? 0),
+    still_held_pct: round2(num(raw.percentage) ?? 0),
+  };
+}
+
 // ---- Tool ----------------------------------------------------------------
 
 const EVM_RE = EVM_ADDR_RE;
@@ -439,7 +507,7 @@ const cache = makeCache<Output>(45_000);
 export const tokenScanTool: Tool<Input, Output> = {
   name: 'token_scan',
   description:
-    'Full degen/memecoin scan of a token by CONTRACT ADDRESS on Solana OR any major EVM chain (Ethereum, Base, BNB/BSC, Arbitrum, Polygon, …). Returns market data (price, FDV, liquidity, 24h volume, age, buy/sell txns, socials) AND on-chain security: total holders, top-holder concentration, LP locked %, and risk flags — for Solana via RugCheck (insider %, network insiders, mint/freeze authority, metadata mutability), for EVM via GoPlus (honeypot, buy/sell tax, ownership renounced, mintable, closed-source, pausable, blacklist, reclaimable ownership). Use this (not crypto_price / dex_token_lookup) whenever a user pastes a contract address — Solana pump.fun mint or an EVM 0x… launch — or asks "is this safe / bundled / a honeypot / who holds this".',
+    'Full degen/memecoin scan of a token by CONTRACT ADDRESS on Solana OR any major EVM chain (Ethereum, Base, BNB/BSC, Arbitrum, Polygon, …), plus newer app-chains (e.g. Robinhood Chain) via their block explorer. Returns market data (price, FDV, liquidity, 24h volume, age, buy/sell txns, socials) AND on-chain security: total holders, top-holder concentration, LP locked %, and risk flags — for Solana via RugCheck (insider %, network insiders, mint/freeze authority, metadata mutability), for EVM via GoPlus (honeypot, buy/sell tax, ownership renounced, mintable, closed-source, pausable, blacklist, reclaimable ownership). Also returns, when available: ATH + drawdown % (all-time high history, EVM + Solana), launch-bundle detection (Solana: % of supply bundled at launch and whether bundlers still hold), deployer/whale wallet posture (is the deployer or top holder distributing the token), and a smart-money block (most profitable traders by realized PnL, holding vs exited). Use this (not crypto_price / dex_token_lookup) whenever a user pastes a contract address — Solana pump.fun mint or an EVM 0x… launch — or asks "is this safe / bundled / a honeypot / who holds this / how far off its ATH".',
   inputSchema: {
     type: 'object',
     properties: {
@@ -463,16 +531,19 @@ export const tokenScanTool: Tool<Input, Output> = {
             return null;
           });
 
-          // Security + smart-money in parallel; all best-effort (fail → null).
+          // Security + smart-money + bundles in parallel; all best-effort (fail → null).
           const solEnrich = !isEvm && solanaTrackerEnabled();
-          const [rc, gp, sm] = await Promise.all([
+          // For EVM chains GoPlus doesn't index (e.g. Robinhood Chain) use the
+          // chain's Blockscout instead of GoPlus, skipping GoPlus's wasted probe.
+          const useBlockscout = isEvm && blockscoutHost(dex?.chainId) != null;
+          const [rc, gp, sm, bundles, bs] = await Promise.all([
             isEvm
               ? Promise.resolve(null)
               : fetchRugcheck(address).catch((e) => {
                   console.warn(`[token_scan] rugcheck: ${(e as Error).message}`);
                   return null;
                 }),
-            isEvm
+            isEvm && !useBlockscout
               ? fetchGoPlus(address, dex?.chainId ?? null).catch((e) => {
                   console.warn(`[token_scan] goplus: ${(e as Error).message}`);
                   return null;
@@ -484,9 +555,21 @@ export const tokenScanTool: Tool<Input, Output> = {
                   return null;
                 })
               : Promise.resolve(null),
+            solEnrich
+              ? fetchBundlers(address).catch((e) => {
+                  console.warn(`[token_scan] bundlers: ${(e as Error).message}`);
+                  return null;
+                })
+              : Promise.resolve(null),
+            useBlockscout
+              ? fetchBlockscoutSecurity(dex!.chainId, address).catch((e) => {
+                  console.warn(`[token_scan] blockscout: ${(e as Error).message}`);
+                  return null;
+                })
+              : Promise.resolve(null),
           ]);
 
-          if (!dex && !rc && !gp) throw new Error(`No data found for ${address}`);
+          if (!dex && !rc && !gp && !bs) throw new Error(`No data found for ${address}`);
 
           const solHolders = rc ? mapTopHolders(rc) : null;
           const evm = gp ? mapGoPlus(gp.result, gp.chainId, address) : null;
@@ -498,11 +581,40 @@ export const tokenScanTool: Tool<Input, Output> = {
             .map((s) => s.url)
             .filter((u): u is string => Boolean(u));
 
+          // ATH/drawdown + deployer/whale posture (Zerion). Runs after security
+          // so it can feed the deployer + top-whale addresses to wallet intel.
+          // Bounded to ≤4 Zerion calls; behind the same 45s cache.
+          const deployerAddr =
+            (isEvm ? gp?.result.creator_address ?? bs?.deployer : rc?.creator) ?? null;
+          const whaleAddr =
+            (isEvm ? firstNonPoolGoPlus(gp?.result) ?? bs?.top_holder : firstNonPoolRc(rc)) ?? null;
+          const zi = zerionEnabled()
+            ? await fetchZerionIntel(dex?.chainId ?? (isEvm ? null : 'solana'), address, {
+                currentPrice: dex ? Number(dex.priceUsd ?? '0') : null,
+                currentFdv: dex?.fdv ?? null,
+                deployerAddr,
+                whaleAddr,
+              }).catch((e) => {
+                console.warn(`[token_scan] zerion: ${(e as Error).message}`);
+                return { ath: null, deployer: null, whale: null };
+              })
+            : { ath: null, deployer: null, whale: null };
+
+          // Blockscout security → the shared chain-agnostic fields (EVM chains
+          // GoPlus can't reach). Unverified source is surfaced as a warn risk.
+          const bsTop: TopHolder[] = bs
+            ? bs.top_holders_pct.map((p) => ({ pct: p, insider: false, is_pool: false }))
+            : [];
+          const bsRisks =
+            bs && bs.is_verified === false
+              ? [{ name: 'Unverified contract', level: 'warn', description: 'Contract source is not verified on the explorer.' }]
+              : [];
+
           return {
             address,
             chain: dex?.chainId ?? (isEvm ? 'evm' : 'solana'),
-            symbol: dex?.baseToken.symbol ?? rc?.tokenMeta?.symbol ?? gp?.result.token_symbol ?? null,
-            name: dex?.baseToken.name ?? rc?.tokenMeta?.name ?? gp?.result.token_name ?? null,
+            symbol: dex?.baseToken.symbol ?? rc?.tokenMeta?.symbol ?? gp?.result.token_symbol ?? bs?.symbol ?? null,
+            name: dex?.baseToken.name ?? rc?.tokenMeta?.name ?? gp?.result.token_name ?? bs?.name ?? null,
             price_usd: dex ? Number(dex.priceUsd ?? '0') : null,
             fdv: dex?.fdv ?? null,
             market_cap: dex?.marketCap ?? null,
@@ -515,12 +627,14 @@ export const tokenScanTool: Tool<Input, Output> = {
             age_hours: ageHours,
             socials,
             dex_url: dex?.url ?? null,
-            security_available: Boolean(rc || evm),
-            holders: rc?.totalHolders ?? evm?.holders ?? null,
-            top_holders: solHolders?.top ?? evm?.top ?? [],
-            top10_concentration_pct: solHolders ? round2(solHolders.concentration) : evm?.concentration ?? null,
+            security_available: Boolean(rc || evm || bs),
+            holders: rc?.totalHolders ?? evm?.holders ?? bs?.holders ?? null,
+            top_holders: solHolders?.top ?? evm?.top ?? bsTop,
+            top10_concentration_pct: solHolders
+              ? round2(solHolders.concentration)
+              : evm?.concentration ?? bs?.top10_concentration_pct ?? null,
             lp_locked_pct: rc ? primaryLpLockedPct(rc) : evm?.lpLockedPct ?? null,
-            risks: rc?.risks ?? evm?.risks ?? [],
+            risks: rc?.risks ?? evm?.risks ?? bsRisks,
             insider_held_pct: solHolders ? round2(solHolders.insiderPct) : null,
             insiders_detected: rc?.graphInsidersDetected ?? null,
             mint_authority_renounced: rc ? rc.mintAuthority == null : null,
@@ -535,6 +649,9 @@ export const tokenScanTool: Tool<Input, Output> = {
             rugcheck_url: rc ? `https://rugcheck.xyz/tokens/${address}` : null,
             evm_security: evm?.evm ?? null,
             smart_money: sm,
+            ath: zi.ath,
+            bundles,
+            wallet_intel: zi.deployer || zi.whale ? { deployer: zi.deployer, whale: zi.whale } : null,
           };
         }),
       `token_scan:${address}`,

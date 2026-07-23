@@ -23,8 +23,13 @@ const Schema = z
   FRED_API_KEY: z.string().optional(),
   VOYAGE_API_KEY: z.string().optional(),
   // Solana Tracker (data.solanatracker.io) — free tier, no card. Enriches
-  // token_scan with per-token top-traders-by-PnL (the smart-money proxy).
+  // token_scan with per-token top-traders-by-PnL (the smart-money proxy) and
+  // launch-bundle detection (/bundlers).
   SOLANA_TRACKER_API_KEY: z.string().optional(),
+  // Zerion (api.zerion.io) — HTTP Basic auth (key as username, empty password).
+  // Unified EVM + Solana. Powers token_scan's ATH/drawdown (fungible charts,
+  // max period) and deployer/whale wallet intel (wallet txns + PnL).
+  ZERION_API_KEY: z.string().optional(),
   // Finnhub (finnhub.io) — free tier. Powers the equity tools: quote,
   // fundamentals/metrics, earnings surprises + calendar + recommendations.
   FINNHUB_API_KEY: z.string().optional(),
@@ -161,6 +166,11 @@ export function companionApiEnabled(cfg: Config = getConfig()): boolean {
 /** Solana Tracker smart-money enrichment for token_scan. Needs a (free) key. */
 export function solanaTrackerEnabled(cfg: Config = getConfig()): boolean {
   return Boolean(cfg.SOLANA_TRACKER_API_KEY);
+}
+
+/** Zerion ATH history + deployer/whale wallet intel for token_scan. Needs a key. */
+export function zerionEnabled(cfg: Config = getConfig()): boolean {
+  return Boolean(cfg.ZERION_API_KEY);
 }
 
 /** Finnhub equity tools (snapshot / fundamentals / earnings). Needs a (free) key. */
