@@ -82,11 +82,9 @@ const p95 = (a) => { if (!a.length) return null; const s = [...a].sort((x, y) =>
 const NAV = [
   ['overview', 'Overview'],
   ['funnel', 'Funnel'],
-  ['people', 'People'],
-  ['payments', 'Payments'],
-  ['trials', 'Trials'],
-  ['activity', 'Activity'],
   ['users', 'Users'],
+  ['payments', 'Payments'],
+  ['activity', 'Activity'],
   ['errors', 'Errors'],
 ];
 

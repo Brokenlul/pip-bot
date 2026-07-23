@@ -67,6 +67,14 @@ export interface NormalizedReply {
   asOf: Date;
   disclaimer?: string;
   attachments?: NormalizedAttachment[];
+  /**
+   * Set when this answer was persisted to memory. Call with the id of the
+   * message the adapter actually sent it as, once known — closes the loop so
+   * a later 👎 (feedback.message_id) can be traced back to the real
+   * question/answer (conversations.message_id) instead of just metadata.
+   * Never throws.
+   */
+  linkMessageId?: (messageId: string) => Promise<void>;
 }
 
 // null = the process is draining for a restart/deploy swap: drop the message

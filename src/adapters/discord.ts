@@ -28,9 +28,13 @@ import {
 import { betaGate, setFounderNotifier, recordFeedback, type GateDecision } from '../beta/guardrails.js';
 import { fmtUtcHm } from '../core/util.js';
 import { registerPusher, registerChannelPusher } from '../core/push.js';
-import { markGuildInstalled, markGuildRemoved } from '../memory/store.js';
+import { markGuildInstalled, markGuildRemoved, upsertHeartbeat } from '../memory/store.js';
 import { recordCommunityJoin } from '../memory/attribution.js';
 import { registerGuildGreeter } from '../core/guild-greeter.js';
+import { detectFrustration, logSentimentEvent } from '../beta/sentiment.js';
+
+// Heartbeat refresh interval for the admin dashboard's online/offline signal.
+const HEARTBEAT_INTERVAL_MS = 60_000;
 
 // Pip is @-mention / DM only — no slash command. Servers: @-mention in an
 // allowed channel; DMs: just message it.
@@ -117,6 +121,7 @@ const SUPPORTED_IMAGE_TYPES: Record<string, NormalizedImage['mediaType']> = {
 export class DiscordAdapter implements PlatformAdapter {
   private client: Client | null = null;
   private handler: MessageHandler | null = null;
+  private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
 
   async start(handler: MessageHandler): Promise<void> {
     if (this.client) throw new Error('DiscordAdapter already started');
@@ -180,6 +185,12 @@ export class DiscordAdapter implements PlatformAdapter {
 
     client.once(Events.ClientReady, (c) => {
       console.log(`[discord] logged in as ${c.user.tag}, watching ${c.guilds.cache.size} guild(s)`);
+      // Admin dashboard online/offline signal — refresh on ready, then keep
+      // alive on an interval so a stalled (not crashed) process reads offline.
+      void upsertHeartbeat('discord').catch(() => {});
+      this.heartbeatTimer = setInterval(() => {
+        void upsertHeartbeat('discord').catch(() => {});
+      }, HEARTBEAT_INTERVAL_MS);
     });
 
     client.on(Events.MessageCreate, (message: Message) => {
@@ -232,6 +243,10 @@ export class DiscordAdapter implements PlatformAdapter {
   }
 
   async stop(): Promise<void> {
+    if (this.heartbeatTimer) {
+      clearInterval(this.heartbeatTimer);
+      this.heartbeatTimer = null;
+    }
     await this.client?.destroy();
     this.client = null;
   }
@@ -420,7 +435,7 @@ export class DiscordAdapter implements PlatformAdapter {
     msg: NormalizedMessage,
     question: string,
     opts: AnswerOptions,
-  ): Promise<{ embeds: EmbedBuilder[]; files?: AttachmentBuilder[] } | null> {
+  ): Promise<{ embeds: EmbedBuilder[]; files?: AttachmentBuilder[]; linkMessageId?: (id: string) => Promise<void> } | null> {
     try {
       const reply = await this.handler!(msg, opts);
       if (!reply) return null; // draining for restart — replacement instance answers
@@ -431,7 +446,7 @@ export class DiscordAdapter implements PlatformAdapter {
         (a) => new AttachmentBuilder(a.data, { name: a.filename }),
       );
       if (files.length) embed.setImage(`attachment://${reply.attachments![0]!.filename}`);
-      return { embeds: [embed], files: files.length ? files : undefined };
+      return { embeds: [embed], files: files.length ? files : undefined, linkMessageId: reply.linkMessageId };
     } catch (e) {
       console.error('[discord] answer failed:', e);
       return { embeds: [errorEmbed(e as Error)] };
@@ -461,6 +476,23 @@ export class DiscordAdapter implements PlatformAdapter {
     const botId = this.client.user.id;
     const isDM = !message.inGuild();
     const mentioned = message.mentions.users.has(botId);
+
+    // Catch in-server frustration ("this bot is shit, it doesn't work") even
+    // when Pip is never @-mentioned — the whole point, since that's the case
+    // that otherwise leaves zero trace. Keyword-only, fire-and-forget, must
+    // never affect whether/how this message gets answered below.
+    if (!isDM) {
+      const terms = detectFrustration(message.content);
+      if (terms) {
+        void logSentimentEvent({
+          platform: 'discord',
+          guildId: message.guildId!,
+          userId: message.author.id,
+          text: message.content,
+          matchedTerms: terms,
+        });
+      }
+    }
 
     // Resolve the replied-to message (cache first, one REST fetch as fallback).
     // Carrying its text is what lets "chart these levels" work when "these"
@@ -571,16 +603,22 @@ export class DiscordAdapter implements PlatformAdapter {
    */
   private async send(
     message: Message,
-    payload: string | { embeds: EmbedBuilder[]; files?: AttachmentBuilder[] },
+    payload: string | { embeds: EmbedBuilder[]; files?: AttachmentBuilder[]; linkMessageId?: (id: string) => Promise<void> },
   ): Promise<void> {
+    const linkMessageId = typeof payload === 'object' ? payload.linkMessageId : undefined;
+    const discordPayload = typeof payload === 'string' ? payload : { embeds: payload.embeds, files: payload.files };
     try {
-      await message.reply(payload);
+      const sent = await message.reply(discordPayload);
+      if (linkMessageId) void linkMessageId(sent.id).catch(() => {});
     } catch (e) {
       const err = e as { code?: number; message?: string };
       console.error(`[discord] reply failed (code ${err.code ?? '?'}): ${err.message ?? e}`);
       if (message.channel.isSendable()) {
         await message.channel
-          .send(payload)
+          .send(discordPayload)
+          .then((sent) => {
+            if (linkMessageId) void linkMessageId(sent.id).catch(() => {});
+          })
           .catch((e2) => console.error(`[discord] channel.send fallback failed: ${(e2 as Error).message}`));
       }
     }

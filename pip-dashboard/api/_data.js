@@ -106,6 +106,52 @@ async function setAccess(platform, platformId, days) {
   return until;
 }
 
+async function loadGuilds() {
+  return sb('guilds?select=id,name,created_at,installed_at,removed_at,greeted_at&limit=2000');
+}
+async function loadGuildLabels() {
+  return sb('guild_labels?select=guild_id,labels,note,updated_at&limit=5000');
+}
+/** Replace a guild's label set. Upsert so an untagged server can be tagged. */
+async function saveGuildLabel(guildId, labels, note) {
+  return sbWrite(
+    'guild_labels?on_conflict=guild_id',
+    'POST',
+    {
+      guild_id: guildId,
+      labels,
+      note: note || null,
+      updated_at: new Date().toISOString(),
+    },
+    'resolution=merge-duplicates,return=minimal',
+  );
+}
+async function loadHeartbeat() {
+  return sb('bot_heartbeat?select=platform,last_seen');
+}
+async function loadSentimentEvents(days = 7) {
+  const since = iso(Date.now() - days * DAY);
+  return sb(`sentiment_event?select=created_at,platform,guild_id,user_id,excerpt,matched_terms&created_at=gte.${since}&order=created_at.desc&limit=2000`);
+}
+/**
+ * conversations rows carrying the given message ids — traces a 👎 back to the
+ * actual flagged question/answer. No FK exists between feedback.message_id and
+ * conversations.message_id (feedback predates it and spans platforms), so this
+ * is a manual client-side join like the rest of the dashboard's CRM views.
+ * Chunked to stay well under PostgREST's URL length limits.
+ */
+async function loadConversationsByMessageIds(messageIds) {
+  const ids = [...new Set(messageIds)].filter(Boolean).map(String);
+  if (!ids.length) return [];
+  const chunks = [];
+  for (let i = 0; i < ids.length; i += 100) chunks.push(ids.slice(i, i + 100));
+  const results = await Promise.all(
+    chunks.map((c) =>
+      sb(`conversations?select=guild_id,user_id,question,answer,message_id,created_at&message_id=in.(${c.map(encodeURIComponent).join(',')})`),
+    ),
+  );
+  return results.flat();
+}
 async function loadActivity(limit = 100) {
   return sb(`conversations?select=created_at,guild_id,user_id,question,answer&order=created_at.desc&limit=${limit}`);
 }
@@ -337,7 +383,8 @@ function overviewMetrics(rows, testers, feedback, caps, founderKeys) {
 }
 
 module.exports = {
-  sb, loadUsage, loadTesters, loadFeedback, loadSafetyEvents, loadSiteEvents, loadActivity, loadUserConversations, loadUserProfile,
+  sb, loadUsage, loadTesters, loadFeedback, loadSafetyEvents, loadSiteEvents, loadGuilds, loadActivity, loadUserConversations, loadUserProfile,
+  loadGuildLabels, saveGuildLabel, loadHeartbeat, loadSentimentEvents, loadConversationsByMessageIds,
   loadAttribution, loadLabels, saveLabels, setAccess,
   loadPayments, classify, tierPrice, inferBilling, overviewMetrics, TIER, DAY,
 };

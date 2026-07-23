@@ -12,6 +12,11 @@ import { betaGate, recordFeedback } from '../beta/guardrails.js';
 import { claimAttribution } from '../memory/attribution.js';
 import { renderReplyText } from '../core/formatter.js';
 import { registerPusher } from '../core/push.js';
+import { upsertHeartbeat } from '../memory/store.js';
+import { detectFrustration, logSentimentEvent } from '../beta/sentiment.js';
+
+// Heartbeat refresh interval for the admin dashboard's online/offline signal.
+const HEARTBEAT_INTERVAL_MS = 60_000;
 
 // Telegram feedback reactions → rating (mirrors the Discord map).
 const TG_RATING: Record<string, 'up' | 'down'> = {
@@ -58,6 +63,7 @@ const SUPPORTED_IMAGE_TYPES: Record<string, NormalizedImage['mediaType']> = {
 export class TelegramAdapter implements PlatformAdapter {
   private bot: Bot | null = null;
   private handler: MessageHandler | null = null;
+  private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
 
   async start(handler: MessageHandler): Promise<void> {
     if (this.bot) throw new Error('TelegramAdapter already started');
@@ -102,6 +108,13 @@ export class TelegramAdapter implements PlatformAdapter {
     await bot.init();
     console.log(`[telegram] logged in as @${bot.botInfo.username} (id ${bot.botInfo.id})`);
 
+    // Admin dashboard online/offline signal — refresh now, then keep alive on
+    // an interval so a stalled (not crashed) process reads offline.
+    void upsertHeartbeat('telegram').catch(() => {});
+    this.heartbeatTimer = setInterval(() => {
+      void upsertHeartbeat('telegram').catch(() => {});
+    }, HEARTBEAT_INTERVAL_MS);
+
     // start() runs the long-polling loop; it never resolves while running, so we
     // do NOT await it here (mirrors DiscordAdapter.start returning after login).
     void bot.start({
@@ -113,6 +126,10 @@ export class TelegramAdapter implements PlatformAdapter {
   }
 
   async stop(): Promise<void> {
+    if (this.heartbeatTimer) {
+      clearInterval(this.heartbeatTimer);
+      this.heartbeatTimer = null;
+    }
     await this.bot?.stop();
     this.bot = null;
   }
@@ -138,6 +155,23 @@ export class TelegramAdapter implements PlatformAdapter {
       mentionsBot(message, botUsername) ||
       // A reply to one of the bot's own messages counts as addressing it.
       message.reply_to_message?.from?.id === botId;
+
+    // Catch in-group frustration ("this bot is shit, it doesn't work") even
+    // when Pip is never @-mentioned — the whole point, since that's the case
+    // that otherwise leaves zero trace. Keyword-only, fire-and-forget, must
+    // never affect whether/how this message gets answered below.
+    if (!isDM) {
+      const terms = detectFrustration(rawText);
+      if (terms) {
+        void logSentimentEvent({
+          platform: 'telegram',
+          guildId: `tg:${ctx.chat!.id}`,
+          userId: String(ctx.from.id),
+          text: rawText,
+          matchedTerms: terms,
+        });
+      }
+    }
 
     // In groups: only when @-mentioned or replied to. In DMs: always.
     if (!isDM && !mentioned) return;
@@ -229,7 +263,7 @@ export class TelegramAdapter implements PlatformAdapter {
         return;
       }
       if (!reply) return; // draining for restart — replacement instance answers
-      await this.send(ctx, toHtml(reply), { html: true });
+      await this.send(ctx, toHtml(reply), { html: true, linkMessageId: reply.linkMessageId });
       // Rendered charts follow the text as photos. Best-effort — a failed
       // photo upload must never eat the answer that already went out.
       for (const att of reply.attachments ?? []) {
@@ -297,19 +331,30 @@ export class TelegramAdapter implements PlatformAdapter {
   private async send(
     ctx: Context,
     text: string,
-    opts: { html?: boolean } = {},
+    opts: { html?: boolean; linkMessageId?: (id: string) => Promise<void> } = {},
   ): Promise<void> {
     const chunks = splitForTelegram(text);
+    // A long answer splits into several messages; link the first chunk's id —
+    // that's the one a reaction realistically lands on.
+    let linked = false;
+    const link = (sent: { message_id: number }) => {
+      if (!linked && opts.linkMessageId) {
+        linked = true;
+        void opts.linkMessageId(String(sent.message_id)).catch(() => {});
+      }
+    };
     for (const chunk of chunks) {
       try {
-        await ctx.reply(chunk, opts.html ? { parse_mode: 'HTML' } : {});
+        const sent = await ctx.reply(chunk, opts.html ? { parse_mode: 'HTML' } : {});
+        link(sent);
       } catch (e) {
         if (opts.html && e instanceof GrammyError && e.error_code === 400) {
           // Formatting slipped — resend as plain text (tags stripped).
           console.warn(`[telegram] HTML parse failed, retrying as plain text: ${e.description}`);
-          await ctx.reply(stripHtml(chunk)).catch((e2) =>
-            console.error(`[telegram] plain-text fallback failed: ${(e2 as Error).message}`),
-          );
+          await ctx
+            .reply(stripHtml(chunk))
+            .then(link)
+            .catch((e2) => console.error(`[telegram] plain-text fallback failed: ${(e2 as Error).message}`));
         } else {
           console.error(`[telegram] reply failed: ${(e as Error).message}`);
         }

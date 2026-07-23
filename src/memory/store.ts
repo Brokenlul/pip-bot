@@ -126,9 +126,9 @@ export async function persistQA(opts: {
   question: string;
   answer: string;
   sources: Array<{ label: string; url?: string }>;
-}): Promise<void> {
+}): Promise<number | null> {
   const db = getDb();
-  if (!db) return;
+  if (!db) return null;
   let vec: number[] | null = null;
   if (embeddingsEnabled()) {
     try {
@@ -137,8 +137,11 @@ export async function persistQA(opts: {
       console.warn(`[memory] embed failed during persist: ${(e as Error).message}`);
     }
   }
-  // 1. Append to conversations (memory of every Q&A — runs with or without embeddings)
-  await db
+  // 1. Append to conversations (memory of every Q&A — runs with or without
+  // embeddings). Selects the new row's id back so a caller can later link the
+  // sent message's id onto it once the adapter knows it (persist happens
+  // before send — see linkConversationMessage).
+  const { data: inserted, error: insertError } = await db
     .from('conversations')
     .insert({
       guild_id: opts.guildId,
@@ -148,7 +151,9 @@ export async function persistQA(opts: {
       sources: opts.sources,
       question_embedding: vec,
     })
-    .throwOnError();
+    .select('id')
+    .single();
+  if (insertError) throw insertError;
 
   // 2. Upsert into semantic cache (only if we have an embedding)
   if (vec) {
@@ -168,6 +173,29 @@ export async function persistQA(opts: {
   // 3. Anonymized global pulse — topic counts only, never raw text or guild id.
   //    Non-blocking and non-throwing so it can never break a persisted answer.
   void recordTopics(opts.question);
+
+  return (inserted as { id: number } | null)?.id ?? null;
+}
+
+/** Best-effort: attach the id of the message an answer was actually sent as, so
+ *  a later thumbs-down (feedback.message_id) can be traced back to the real
+ *  question/answer instead of just guild/user/time metadata. Never throws. */
+export async function linkConversationMessage(conversationId: number, messageId: string): Promise<void> {
+  const db = getDb();
+  if (!db) return;
+  const { error } = await db.from('conversations').update({ message_id: messageId }).eq('id', conversationId);
+  if (error) console.warn(`[memory] linkConversationMessage: ${error.message}`);
+}
+
+/** Fire-and-forget "I'm alive" ping for the admin dashboard's online/offline
+ *  signal. One row per platform, refreshed on ready + on an interval. */
+export async function upsertHeartbeat(platform: string): Promise<void> {
+  const db = getDb();
+  if (!db) return;
+  const { error } = await db
+    .from('bot_heartbeat')
+    .upsert({ platform, last_seen: new Date().toISOString() }, { onConflict: 'platform' });
+  if (error) console.warn(`[memory] upsertHeartbeat: ${error.message}`);
 }
 
 export async function recentQuestions(

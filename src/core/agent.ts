@@ -66,6 +66,7 @@ import {
 import {
   lookupCache,
   persistQA,
+  linkConversationMessage,
   ensureGuild,
   incrementUsage,
   isMemoryOn,
@@ -867,13 +868,24 @@ export async function answer(msg: NormalizedMessage, opts: AnswerOptions = {}): 
 
   // 3c. Memory write (M4), fire-and-forget, never blocks the reply
   if (isMemoryOn()) {
-    persistQA({
+    const persisted = persistQA({
       guildId: msg.guildId,
       userId: msg.userId,
       question: questionText.trim() || (hasImages ? '[chart image]' : questionText),
       answer: finalText,
       sources: reply.sources,
-    }).catch((e) => console.warn(`[memory] persistQA: ${(e as Error).message}`));
+    }).catch((e) => {
+      console.warn(`[memory] persistQA: ${(e as Error).message}`);
+      return null;
+    });
+
+    // Persist happens before send, so the row's message_id can only be filled
+    // in once the adapter knows what it actually sent this as. Give it a way
+    // to report that back once both sides are ready.
+    reply.linkMessageId = async (messageId: string) => {
+      const id = await persisted;
+      if (id != null) await linkConversationMessage(id, messageId).catch(() => {});
+    };
 
     // 3d. Learning, refresh this trader's profile (throttled, cheap, background).
     void refreshProfile(msg.guildId, msg.userId).catch((e) =>

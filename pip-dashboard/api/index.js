@@ -1,5 +1,5 @@
 // Pip admin console — a single zero-dependency Vercel function that routes to
-// six server-rendered views (overview, payments, trials, activity, users,
+// six server-rendered tabs (overview, funnel, users, payments, activity,
 // errors) behind a cookie login. Reads Supabase + the Dodo/MoonPay payment
 // APIs server-side; keys never reach the browser.
 const R = require('./_render.js');
@@ -74,25 +74,52 @@ module.exports = async function handler(req, res) {
     } catch (e) {
       console.error('[admin] CRM write failed:', e && e.message ? e.message : e);
       return R.send(res, 502, R.shell({
-        title: 'Error', active: 'people',
-        body: `<div class="card"><p class="bad">That change did not save. Nothing was modified. Check the server logs.</p><p><a href="/people">Back to People</a></p></div>`,
+        title: 'Error', active: 'users',
+        body: `<div class="card"><p class="bad">That change did not save. Nothing was modified. Check the server logs.</p><p><a href="/users">Back to Users</a></p></div>`,
       }));
     }
     res.statusCode = 303; // 303 so the browser re-GETs instead of re-POSTing
-    res.setHeader('location', req.headers.referer && req.headers.referer.includes('/people') ? req.headers.referer : '/people');
+    res.setHeader('location', req.headers.referer && req.headers.referer.includes('/users') ? req.headers.referer : '/users');
+    return res.end();
+  }
+
+  // ---- Guild CRM write (labels only — a guild has no access/trial row of its
+  // own, see serversView). Same POST-then-redirect shape as the block above.
+  if (path === '/guilds/label') {
+    if ((req.method || 'GET').toUpperCase() !== 'POST') {
+      res.statusCode = 405;
+      return res.end('method not allowed');
+    }
+    const form = new URLSearchParams(await readBody(req));
+    const guildId = form.get('guild_id') || '';
+    if (!guildId) {
+      res.statusCode = 400;
+      return res.end('bad request');
+    }
+    try {
+      const labels = (form.get('labels') || '')
+        .split(',').map((s) => s.trim().toLowerCase()).filter(Boolean).slice(0, 12);
+      await D.saveGuildLabel(guildId, labels, form.get('note'));
+    } catch (e) {
+      console.error('[admin] guild CRM write failed:', e && e.message ? e.message : e);
+      return R.send(res, 502, R.shell({
+        title: 'Error', active: 'users',
+        body: `<div class="card"><p class="bad">That change did not save. Nothing was modified. Check the server logs.</p><p><a href="/users?scope=guilds">Back to Servers</a></p></div>`,
+      }));
+    }
+    res.statusCode = 303;
+    res.setHeader('location', req.headers.referer && req.headers.referer.includes('/users') ? req.headers.referer : '/users?scope=guilds');
     return res.end();
   }
 
   const view = path === '/' ? 'overview' : path.slice(1);
   try {
     switch (view) {
-      case 'people': return R.send(res, 200, await viewPeople(req.query.filter));
       case 'overview': return R.send(res, 200, await viewOverview());
       case 'funnel': return R.send(res, 200, await viewFunnel());
       case 'payments': return R.send(res, 200, await viewPayments());
-      case 'trials': return R.send(res, 200, await viewTrials());
       case 'activity': return R.send(res, 200, await viewActivity());
-      case 'users': return R.send(res, 200, await viewUsers(req.query.id, req.query.q));
+      case 'users': return R.send(res, 200, await viewUsers(req.query));
       case 'errors': return R.send(res, 200, await viewErrors());
       default:
         return R.send(res, 404, R.shell({ title: 'Not found', active: '', body: `<div class="card"><p class="muted">No such view.</p></div>` }));
@@ -145,6 +172,15 @@ async function viewOverview() {
   const spendFrac = CAPS.spend ? m.todaySpend / CAPS.spend : 0;
   const msgFrac = CAPS.msgs ? m.todayMsgs / CAPS.msgs : 0;
   const maxDay = Math.max(0.01, ...m.days.map((d) => d.spend));
+  // Messages today, by UTC hour — same bar-chart shape as the 7-day spend
+  // chart below, just bucketed finer so today's shape is legible at a glance.
+  const dayStartIso = new Date(new Date().toISOString().slice(0, 10)).toISOString();
+  const hourly = Array.from({ length: 24 }, (_, h) => ({ h, n: 0 }));
+  for (const r of rows) {
+    if (r.created_at < dayStartIso) continue;
+    hourly[new Date(r.created_at).getUTCHours()].n += 1;
+  }
+  const maxHour = Math.max(1, ...hourly.map((x) => x.n));
   const meter = (label, frac, value, cap) => `<div class="card stat"><div class="eyebrow">${label}</div><div class="big">${value}<span class="muted"> / ${cap}</span></div><div class="meter"><div class="fill" style="width:${Math.min(100, frac * 100).toFixed(1)}%;background:${barColor(frac)}"></div></div><div class="muted">${pct(frac)} of daily cap${frac >= 0.8 ? ' · degrade' : ''}</div></div>`;
   const stackRows = m.stack.map(([layer, metric, value, ok, target]) =>
     `<tr><td class="mono">${layer}</td><td>${metric}</td><td class="${ok ? 'ok' : String(value).startsWith('—') ? 'muted' : 'bad'}"><b>${value}</b></td><td class="muted">${target}</td><td>${String(value).startsWith('—') ? '<span class="muted">·</span>' : ok ? '<span class="ok">✓</span>' : '<span class="bad">✗</span>'}</td></tr>`).join('');
@@ -168,6 +204,7 @@ async function viewOverview() {
       ${stat('Cache hit rate', pct(m.cacheRate), 'served free')}
       ${stat('Votes · 7d', `<span class="ok">▲ ${m.up}</span> · <span class="bad">▼ ${m.down}</span>`)}
     </div>
+    ${card('Messages today · by hour (UTC)', `<div class="chart">${hourly.map((x) => `<div class="col"><div class="bar" style="height:${Math.max(2, (x.n / maxHour) * 120)}px" title="${x.n} msg${x.n === 1 ? '' : 's'}"></div><div class="tick">${String(x.h).padStart(2, '0')}</div></div>`).join('')}</div>`)}
     ${card('Spend · last 7 days', `<div class="chart">${m.days.map((d) => `<div class="col"><div class="bar" style="height:${Math.max(2, (d.spend / maxDay) * 120)}px" title="${usd(d.spend)}"></div><div class="tick">${d.day.slice(5)}</div></div>`).join('')}</div>`)}
     ${card('Top tools · 7d', table(['Tool', 'Calls'], toolRows))}`;
   return R.shell({ title: 'pip · admin — overview', active: 'overview', body, updated: m.updated, refresh: true });
@@ -207,44 +244,6 @@ async function viewPayments() {
   return R.shell({ title: 'pip · admin — payments', active: 'payments', body, updated: new Date() });
 }
 
-// ---- 3. Trials & conversions ----------------------------------------------
-async function viewTrials() {
-  const testers = await D.loadTesters();
-  const now = Date.now();
-  const withState = testers.map((t) => ({ t, state: D.classify(t, now) }));
-  const trials = withState.filter((x) => x.state === 'trial');
-  const paid = withState.filter((x) => x.state === 'paid');
-  const lapsed = withState.filter((x) => x.state === 'lapsed');
-  const expiringSoon = trials.filter((x) => x.t.access_until && new Date(x.t.access_until).getTime() - now < 2 * D.DAY);
-  const lapsedUnpaid = lapsed.filter((x) => !x.t.subscription_provider);
-  const extended = testers.filter((t) => t.extension_used);
-  const convBase = paid.length + lapsedUnpaid.length;
-  const convRate = convBase ? paid.length / convBase : null;
-
-  const trialRows = trials.sort((a, b) => new Date(a.t.access_until || 0) - new Date(b.t.access_until || 0)).map((x) => {
-    const ends = x.t.access_until ? new Date(x.t.access_until).getTime() : null;
-    const left = ends ? Math.max(0, Math.round((ends - now) / D.DAY)) : '∞';
-    const soon = ends && ends - now < 2 * D.DAY;
-    return `<tr><td class="mono">${esc(x.t.name || x.t.platform_id)}</td><td><span class="pill">${esc(x.t.platform)}</span></td><td class="${soon ? 'bad' : ''}">${left}${left === '∞' ? '' : 'd'} left</td><td class="muted">${ymd(x.t.access_until)}</td><td>${x.t.extension_used ? '<span class="gold">extended</span>' : ''}</td></tr>`;
-  }).join('');
-  const lapsedRows = lapsedUnpaid.map((x) =>
-    `<tr><td class="mono">${esc(x.t.name || x.t.platform_id)}</td><td><span class="pill">${esc(x.t.platform)}</span></td><td class="muted">${ymd(x.t.access_until)}</td><td>${x.t.extension_used ? 'used ext' : 'no ext'}</td></tr>`).join('');
-  const extRows = extended.map((t) =>
-    `<tr><td class="mono">${esc(t.name || t.platform_id)}</td><td class="muted">${t.extension_claimed_at ? ago(t.extension_claimed_at) : '—'}</td><td>${t.extension_tweet_url ? `<a class="rowlink" href="${esc(t.extension_tweet_url)}" target="_blank" rel="noopener">tweet ↗</a>` : '<span class="muted">no link</span>'}</td></tr>`).join('');
-
-  const body = `
-    <div class="grid4">
-      ${stat('On trial now', String(trials.length))}
-      ${stat('Expiring ≤48h', String(expiringSoon.length), expiringSoon.length ? 'reach out' : '')}
-      ${stat('Lapsed (unpaid)', String(lapsedUnpaid.length))}
-      ${stat('Trial → paid', convRate == null ? '—' : pct(convRate), `${paid.length} paid / ${convBase} decided`)}
-    </div>
-    ${card('On trial now · soonest to expire first', table(['User', 'Platform', 'Left', 'Ends', ''], trialRows))}
-    ${card('Tweet extensions claimed · verify the links', table(['User', 'Claimed', 'Tweet'], extRows))}
-    ${card('Lapsed & unpaid · re-engage or let go', table(['User', 'Platform', 'Ended', 'Extension'], lapsedRows))}`;
-  return R.shell({ title: 'pip · admin — trials', active: 'trials', body, updated: new Date() });
-}
-
 // ---- 3b. Funnel (website -> bot) -------------------------------------------
 // Answers the launch-day question: are people arriving, and do any of them go
 // on to actually use Pip? The website half comes from site_events (first-party,
@@ -256,15 +255,19 @@ async function viewTrials() {
 // anonymous, so "clicked add-bot" and "started using Pip" are matched at the
 // COHORT level (same 7-day window), not per person. The percentages are
 // directional, not a per-user join.
-// ---- People (CRM) ----------------------------------------------------------
+// ---- Users tab: People sub-view (CRM) ---------------------------------------
 // One row per PERSON, not per tester. A community joiner who never messaged has
 // no beta_testers row at all, and those unconverted leads are the whole reason
-// this view exists — the Users view can't see them.
-async function viewPeople(filter) {
+// this view exists. Merges the old People (funnel stage, labels, access
+// grant/revoke), Users (search, spend/msgs, drill-down link) and Trials
+// (expiring soon, trial→paid rate, tweet extensions, lapsed re-engage) views.
+async function peopleView(filter, q) {
   const now = Date.now();
-  const [testers, usage, claims, labels] = await Promise.all([
-    D.loadTesters(), D.loadUsage(90), D.loadAttribution(), D.loadLabels(),
+  const [testers, usageAll, claims, labels] = await Promise.all([
+    D.loadTesters(), D.loadUsage(3650), D.loadAttribution(), D.loadLabels(),
   ]);
+  const cutoff7 = now - 7 * D.DAY;
+  const usage7 = usageAll.filter((u) => new Date(u.created_at).getTime() >= cutoff7);
 
   const key = (p, id) => `${p}:${id}`;
   const people = new Map();
@@ -273,8 +276,8 @@ async function viewPeople(filter) {
     if (!people.has(k)) {
       people.set(k, {
         platform, platformId, name: null, source: null, visitorId: null,
-        firstSeen: null, joinedAt: null, msgs: 0, lastActive: null, spend: 0,
-        accessUntil: undefined, paid: false, labels: [], note: null,
+        firstSeen: null, joinedAt: null, msgs7: 0, spend7: 0, msgsAll: 0, spendAll: 0,
+        lastActive: null, accessUntil: undefined, paid: false, labels: [], note: null,
       });
     }
     return people.get(k);
@@ -299,12 +302,18 @@ async function viewPeople(filter) {
     if (!p.name && c.meta && c.meta.name) p.name = c.meta.name;
   }
 
-  for (const u of usage) {
+  for (const u of usageAll) {
     const p = people.get(key(u.platform, String(u.user_id)));
     if (!p) continue;
-    p.msgs += 1;
-    p.spend += Number(u.cost_usd || 0);
+    p.msgsAll += 1;
+    p.spendAll += Number(u.cost_usd || 0);
     if (!p.lastActive || u.created_at > p.lastActive) p.lastActive = u.created_at;
+  }
+  for (const u of usage7) {
+    const p = people.get(key(u.platform, String(u.user_id)));
+    if (!p) continue;
+    p.msgs7 += 1;
+    p.spend7 += Number(u.cost_usd || 0);
   }
 
   for (const l of labels) {
@@ -315,11 +324,11 @@ async function viewPeople(filter) {
   // Lifecycle stage. Ordered most-advanced first so the badge reads as progress.
   const stageOf = (p) => {
     if (p.paid) return 'paid';
-    if (p.msgs === 0) return 'lead';           // arrived, never spoke
+    if (p.msgsAll === 0) return 'lead';        // arrived, never spoke
     const lapsed = p.accessUntil && Number.isFinite(new Date(p.accessUntil).getTime())
       && now > new Date(p.accessUntil).getTime();
     if (lapsed) return 'lapsed';
-    const days = new Set(usage
+    const days = new Set(usageAll
       .filter((u) => String(u.user_id) === p.platformId)
       .map((u) => ymd(u.created_at)));
     return days.size >= 2 ? 'returned' : 'activated';
@@ -327,6 +336,8 @@ async function viewPeople(filter) {
 
   let rows = [...people.values()].map((p) => ({ ...p, stage: stageOf(p) }));
   if (FOUNDER_KEYS.size) rows = rows.filter((p) => !FOUNDER_KEYS.has(key(p.platform, p.platformId)));
+  const needle = (q || '').toLowerCase();
+  if (needle) rows = rows.filter((p) => String(p.name || '').toLowerCase().includes(needle) || String(p.platformId).toLowerCase().includes(needle));
   if (filter) rows = rows.filter((p) => p.stage === filter || p.labels.includes(filter));
 
   // Leads first (they need action), then by recency.
@@ -340,7 +351,23 @@ async function viewPeople(filter) {
     telegram: 'site → telegram', discord_bot: 'site → add-bot', discord_community: 'community join',
   };
 
-  const body = rows.map((p) => {
+  // Trial/conversion metrics — same semantics as the old Trials view
+  // (beta_testers access state), a different lens than the funnel stage above.
+  const withState = testers.map((t) => ({ t, state: D.classify(t, now) }));
+  const trialTesters = withState.filter((x) => x.state === 'trial');
+  const paidTesters = withState.filter((x) => x.state === 'paid');
+  const lapsedTesters = withState.filter((x) => x.state === 'lapsed');
+  const expiringSoon = trialTesters.filter((x) => x.t.access_until && new Date(x.t.access_until).getTime() - now < 2 * D.DAY);
+  const lapsedUnpaidTesters = lapsedTesters.filter((x) => !x.t.subscription_provider);
+  const extendedTesters = testers.filter((t) => t.extension_used);
+  const convBase = paidTesters.length + lapsedUnpaidTesters.length;
+  const convRate = convBase ? paidTesters.length / convBase : null;
+  const lapsedRows = lapsedUnpaidTesters.map((x) =>
+    `<tr><td class="mono">${esc(x.t.name || x.t.platform_id)}</td><td><span class="pill">${esc(x.t.platform)}</span></td><td class="muted">${ymd(x.t.access_until)}</td><td>${x.t.extension_used ? 'used ext' : 'no ext'}</td></tr>`).join('');
+  const extRows = extendedTesters.map((t) =>
+    `<tr><td class="mono">${esc(t.name || t.platform_id)}</td><td class="muted">${t.extension_claimed_at ? ago(t.extension_claimed_at) : '—'}</td><td>${t.extension_tweet_url ? `<a class="rowlink" href="${esc(t.extension_tweet_url)}" target="_blank" rel="noopener">tweet ↗</a>` : '<span class="muted">no link</span>'}</td></tr>`).join('');
+
+  const bodyRows = rows.map((p) => {
     const id = `${p.platform}:${p.platformId}`;
     const lapsed = p.stage === 'lapsed';
     const until = p.accessUntil
@@ -348,12 +375,15 @@ async function viewPeople(filter) {
       : '—';
     return `<tr>
       <td>
-        <div><strong>${esc(p.name || shortId(p.platformId))}</strong></div>
+        <div><a class="rowlink" href="/users?id=${encodeURIComponent(p.platformId)}"><strong>${esc(p.name || shortId(p.platformId))}</strong></a></div>
         <div class="muted mono" style="font-size:11px">${esc(id)}</div>
       </td>
       <td><span class="tag ${p.stage === 'paid' ? 'paid' : p.stage === 'lapsed' ? 'lapsed' : p.stage === 'lead' ? 'guest' : 'trial'}">${p.stage}</span></td>
       <td class="muted">${esc(SOURCE_LABEL[p.source] || '—')}${p.visitorId ? `<div class="mono" style="font-size:11px">visitor ${esc(p.visitorId.slice(0, 8))}…</div>` : ''}</td>
-      <td class="mono">${p.msgs}</td>
+      <td class="mono">${p.msgs7}</td>
+      <td class="mono">${usd4(p.spend7)}</td>
+      <td class="mono muted">${p.msgsAll}</td>
+      <td class="mono muted">${usd4(p.spendAll)}</td>
       <td class="muted">${p.lastActive ? ago(p.lastActive) : '—'}</td>
       <td class="mono ${lapsed ? 'bad' : ''}">${until}</td>
       <td>${statusSelect(p)}</td>
@@ -365,16 +395,22 @@ async function viewPeople(filter) {
   }).join('');
 
   const chip = (label, value) =>
-    `<a href="/people${value ? `?filter=${encodeURIComponent(value)}` : ''}" class="pill ${filter === value ? 'on' : ''}">${esc(label)}</a>`;
+    `<a href="/users${value ? `?filter=${encodeURIComponent(value)}` : ''}" class="pill ${filter === value ? 'on' : ''}">${esc(label)}</a>`;
 
   return R.shell({
-    title: 'pip · admin — people', active: 'people',
+    title: 'pip · admin — users', active: 'users',
     body: `
-      <div class="grid">
+      ${usersSubNav('')}
+      <div class="card"><form method="GET" action="/users" style="display:flex;gap:10px"><input class="input" name="q" placeholder="Search by name or id" value="${esc(q || '')}"><button class="btn" type="submit">Search</button></form></div>
+      <div class="grid4">
         ${stat('People', rows.length, 'excludes founder')}
         ${stat('Leads', counts.lead || 0, 'arrived, never messaged')}
         ${stat('Activated', (counts.activated || 0) + (counts.returned || 0), `${counts.returned || 0} came back another day`)}
         ${stat('Paid', counts.paid || 0, `${counts.lapsed || 0} lapsed`)}
+      </div>
+      <div class="grid2">
+        ${stat('Expiring ≤48h', expiringSoon.length, expiringSoon.length ? 'reach out' : '')}
+        ${stat('Trial → paid', convRate == null ? '—' : pct(convRate), `${paidTesters.length} paid / ${convBase} decided`)}
       </div>
       ${card('Filter', `<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">
         ${chip('all', '')}${chip('leads', 'lead')}${chip('activated', 'activated')}${chip('returned', 'returned')}${chip('lapsed', 'lapsed')}${chip('paid', 'paid')}
@@ -382,9 +418,11 @@ async function viewPeople(filter) {
         ${STATUSES.map((s) => chip(s, s)).join('')}
       </div>`)}
       ${card('People', table(
-        ['Person', 'Stage', 'Source', 'Msgs', 'Last active', 'Access until', 'Status', 'Access'],
-        body,
+        ['Person', 'Stage', 'Source', 'Msgs 7d', 'Spend 7d', 'Msgs all-time', 'Spend all-time', 'Last active', 'Access until', 'Status', 'Access'],
+        bodyRows,
       ))}
+      ${card('Lapsed & unpaid · re-engage or let go', table(['User', 'Platform', 'Ended', 'Extension'], lapsedRows))}
+      ${card('Tweet extensions claimed · verify the links', table(['User', 'Claimed', 'Tweet'], extRows))}
       <div class="card"><p class="muted">
         A <strong>lead</strong> arrived but never sent a message. Source is only known where the
         handoff could carry a token: the community invite takes no per-visitor parameter, so those
@@ -426,6 +464,32 @@ function accessForm(p, days, label) {
     <input type="hidden" name="id" value="${esc(p.platformId)}">
     <input type="hidden" name="days" value="${days}">
     <button class="btn" type="submit" style="font-size:11px">${label}</button>
+  </form>`;
+}
+
+// ---- Users tab: shared sub-nav + Servers CRM label control ------------------
+function usersSubNav(scope) {
+  const item = (label, value) =>
+    `<a href="/users${value ? `?scope=${value}` : ''}" class="pill ${scope === value ? 'on' : ''}">${esc(label)}</a>`;
+  return `<div style="display:flex;gap:6px;margin-bottom:14px">${item('People', '')}${item('Servers', 'guilds')}</div>`;
+}
+
+// Guild CRM vocabulary. No trial/access action here on purpose — a guild has
+// no access row of its own (see serversView below), just a shared daily spend
+// cap, so labeling + visibility is the whole of what this control does.
+const GUILD_STATUSES = ['champion', 'at risk', 'outreach', 'quiet'];
+
+function guildLabelSelect(g) {
+  const current = (g.labels && g.labels[0]) || '';
+  const options = GUILD_STATUSES.includes(current) || !current ? GUILD_STATUSES : [...GUILD_STATUSES, current];
+  return `<form method="POST" action="/guilds/label" style="display:inline">
+    <input type="hidden" name="guild_id" value="${esc(g.id)}">
+    <select name="labels" class="status s-${esc(current.replace(/\s+/g, '-') || 'none')}" onchange="this.form.submit()">
+      <option value=""${current ? '' : ' selected'}>—</option>
+      ${options.map((s) =>
+        `<option value="${esc(s)}"${s === current ? ' selected' : ''}>${esc(s)}</option>`).join('')}
+    </select>
+    <noscript><button class="btn" type="submit" style="font-size:11px">set</button></noscript>
   </form>`;
 }
 
@@ -573,30 +637,13 @@ async function viewActivity() {
   return R.shell({ title: 'pip · admin — activity', active: 'activity', body, updated: new Date(), refresh: true });
 }
 
-// ---- 5. Users + drill-down -------------------------------------------------
-async function viewUsers(id, q) {
-  if (id) return viewUserDetail(id);
-  const [testers, rows] = await Promise.all([D.loadTesters(), D.loadUsage(7)]);
-  const now = Date.now();
-  const spendBy = new Map(); const lastBy = new Map(); const msgBy = new Map();
-  for (const r of rows) {
-    spendBy.set(r.user_id, (spendBy.get(r.user_id) || 0) + (Number(r.cost_usd) || 0));
-    msgBy.set(r.user_id, (msgBy.get(r.user_id) || 0) + 1);
-    if (!lastBy.has(r.user_id) || r.created_at > lastBy.get(r.user_id)) lastBy.set(r.user_id, r.created_at);
-  }
-  const needle = (q || '').toLowerCase();
-  const list = testers
-    .filter((t) => !needle || String(t.name || '').toLowerCase().includes(needle) || String(t.platform_id).toLowerCase().includes(needle))
-    .map((t) => ({ t, state: D.classify(t, now), last: lastBy.get(t.platform_id), spend: spendBy.get(t.platform_id) || 0, msgs: msgBy.get(t.platform_id) || 0 }))
-    .sort((a, b) => (b.last || '').localeCompare(a.last || ''));
-  const rowsHtml = list.map((x) =>
-    `<tr><td><a class="rowlink mono" href="/users?id=${encodeURIComponent(x.t.platform_id)}">${esc(x.t.name || x.t.platform_id)}</a></td>
-      <td><span class="pill">${esc(x.t.platform)}</span></td><td>${subTag(x.state)}</td>
-      <td>${x.msgs}</td><td>${usd4(x.spend)}</td><td class="muted">${x.last ? ago(x.last) : '—'}</td></tr>`).join('');
-  const body = `
-    <div class="card"><form method="GET" action="/users" style="display:flex;gap:10px"><input class="input" name="q" placeholder="Search by name or id" value="${esc(q || '')}"><button class="btn" type="submit">Search</button></form></div>
-    ${card(`Users · ${list.length}${needle ? ` matching “${esc(q)}”` : ''} (spend/msgs = last 7d)`, table(['User', 'Platform', 'State', 'Msgs 7d', 'Spend 7d', 'Last seen'], rowsHtml))}`;
-  return R.shell({ title: 'pip · admin — users', active: 'users', body, updated: new Date() });
+// ---- 3. Users tab — dispatches between the People and Servers sub-views,
+// and the per-person drill-down. One nav entry, three renders, to keep the
+// tab count down without losing any of the three views it replaces.
+async function viewUsers(query) {
+  if (query.id) return viewUserDetail(query.id);
+  if (query.scope === 'guilds') return serversView();
+  return peopleView(query.filter, query.q);
 }
 
 async function viewUserDetail(id) {
@@ -630,12 +677,130 @@ async function viewUserDetail(id) {
   return R.shell({ title: 'pip · admin — user', active: 'users', body, updated: new Date() });
 }
 
+// ---- Users tab: Servers sub-view --------------------------------------------
+// "guilds" rows are written on first message (ensureGuild) and kept live by
+// GuildCreate/GuildDelete (see db/migrations/0013_attribution.sql), so
+// removed_at is null <=> Pip is currently a member. No live Discord API call
+// needed — this dashboard is a separate deployment from the bot process.
+//
+// The table is keyed by conversation context, not just Discord guilds: DMs use
+// "dm:<id>" (or "dm:tg:<id>" for Telegram DMs) and Telegram group chats use
+// "tg:<id>". Only bare numeric ids are real Discord guilds — a raw
+// !removed_at filter would list DMs and Telegram chats as "servers."
+const isDiscordGuildId = (id) => /^\d+$/.test(String(id));
+// Mirrors BETA_GUILD_DAILY_SPEND_USD (src/config.ts) — the shared per-server
+// daily cap. A guild has no access/trial row of its own to extend (see
+// guild_labels above); this cap is the only guild-scoped access lever there is.
+const GUILD_DAILY_CAP = Number(process.env.BETA_GUILD_DAILY_SPEND_USD || 3);
+
+async function serversView() {
+  const now = Date.now();
+  const [guilds, guildLabels, usageAll, sentiment] = await Promise.all([
+    D.loadGuilds(), D.loadGuildLabels(), D.loadUsage(3650), D.loadSentimentEvents(7),
+  ]);
+  const cutoff7 = now - 7 * D.DAY;
+  const cutoff14 = now - 14 * D.DAY;
+  const dayStart = new Date(new Date().toISOString().slice(0, 10)).getTime();
+
+  const msgs7 = new Map(); const msgsPrev7 = new Map(); const spend7 = new Map();
+  const msgsAll = new Map(); const spendAll = new Map(); const lastBy = new Map(); const spendToday = new Map();
+  for (const r of usageAll) {
+    if (!isDiscordGuildId(r.guild_id)) continue;
+    const t = new Date(r.created_at).getTime();
+    msgsAll.set(r.guild_id, (msgsAll.get(r.guild_id) || 0) + 1);
+    spendAll.set(r.guild_id, (spendAll.get(r.guild_id) || 0) + (Number(r.cost_usd) || 0));
+    if (!lastBy.has(r.guild_id) || r.created_at > lastBy.get(r.guild_id)) lastBy.set(r.guild_id, r.created_at);
+    if (t >= cutoff7) {
+      msgs7.set(r.guild_id, (msgs7.get(r.guild_id) || 0) + 1);
+      spend7.set(r.guild_id, (spend7.get(r.guild_id) || 0) + (Number(r.cost_usd) || 0));
+    } else if (t >= cutoff14) {
+      msgsPrev7.set(r.guild_id, (msgsPrev7.get(r.guild_id) || 0) + 1);
+    }
+    if (t >= dayStart) spendToday.set(r.guild_id, (spendToday.get(r.guild_id) || 0) + (Number(r.cost_usd) || 0));
+  }
+  // Frustration mentions — "is this server still liking Pip" — see
+  // src/beta/sentiment.ts. Full detail list lives on the Errors tab.
+  const frustrationBy = new Map();
+  for (const s of sentiment) {
+    if (!isDiscordGuildId(s.guild_id)) continue;
+    frustrationBy.set(s.guild_id, (frustrationBy.get(s.guild_id) || 0) + 1);
+  }
+  const labelBy = new Map(guildLabels.map((l) => [l.guild_id, l]));
+
+  const discordGuilds = guilds.filter((g) => isDiscordGuildId(g.id));
+  const active = discordGuilds.filter((g) => !g.removed_at);
+  const removed = discordGuilds.filter((g) => g.removed_at);
+  active.sort((a, b) => (lastBy.get(b.id) || '').localeCompare(lastBy.get(a.id) || ''));
+
+  // Declining usage — "not using Pip as much as they did" — this week vs. the
+  // week before, both drawn from the same all-time fetch above.
+  const trend = (id) => {
+    const cur = msgs7.get(id) || 0;
+    const prev = msgsPrev7.get(id) || 0;
+    if (!prev) return cur ? '<span class="ok">new</span>' : '';
+    const delta = (cur - prev) / prev;
+    if (Math.abs(delta) < 0.1) return '<span class="muted">flat</span>';
+    return delta > 0
+      ? `<span class="ok">▲${Math.round(delta * 100)}%</span>`
+      : `<span class="bad">▼${Math.round(Math.abs(delta) * 100)}%</span>`;
+  };
+
+  const rows = active.map((g) => {
+    const capFrac = GUILD_DAILY_CAP ? (spendToday.get(g.id) || 0) / GUILD_DAILY_CAP : 0;
+    const label = labelBy.get(g.id);
+    const frCount = frustrationBy.get(g.id) || 0;
+    return `<tr>
+      <td><strong>${esc(g.name || 'unnamed')}</strong><div class="muted mono" style="font-size:11px">${esc(g.id)}</div></td>
+      <td class="mono">${msgs7.get(g.id) || 0} <span style="font-size:11px">${trend(g.id)}</span></td>
+      <td class="mono">${usd4(spend7.get(g.id) || 0)}${capFrac >= 0.8 ? ' <span class="bad" style="font-size:10px">near cap</span>' : ''}</td>
+      <td class="mono muted">${msgsAll.get(g.id) || 0}</td>
+      <td class="mono muted">${usd4(spendAll.get(g.id) || 0)}</td>
+      <td>${frCount ? `<a class="rowlink bad" href="/errors#frustration">${frCount}</a>` : '<span class="muted">—</span>'}</td>
+      <td>${guildLabelSelect({ id: g.id, labels: label ? label.labels : [] })}</td>
+      <td class="muted">${lastBy.get(g.id) ? ago(lastBy.get(g.id)) : '—'}</td>
+    </tr>`;
+  }).join('');
+  const removedRows = removed
+    .sort((a, b) => String(b.removed_at || '').localeCompare(String(a.removed_at || '')))
+    .map((g) => `<tr>
+      <td>${esc(g.name || 'unnamed')}</td>
+      <td class="mono muted" style="font-size:12px">${esc(g.id)}</td>
+      <td class="muted">${g.installed_at ? ymd(g.installed_at) : '—'}</td>
+      <td class="muted">${ago(g.removed_at)}</td>
+    </tr>`).join('');
+
+  const totalMsgs7 = [...msgs7.values()].reduce((a, b) => a + b, 0);
+  const body = `
+    ${usersSubNav('guilds')}
+    <div class="grid3">
+      ${stat('Servers now', String(active.length))}
+      ${stat('Messages · 7d', totalMsgs7.toLocaleString())}
+      ${stat('Removed (all-time)', String(removed.length))}
+    </div>
+    ${card('Servers Pip is in', table(
+      ['Server', 'Msgs 7d', 'Spend 7d', 'Msgs all-time', 'Spend all-time', 'Frustration 7d', 'Label', 'Last active'],
+      rows,
+    ) + `<p class="muted" style="margin-top:8px">Trend compares this week to the week before. "near cap" flags a server that's already used ≥80% of today's ${usd(GUILD_DAILY_CAP)} shared daily spend cap. Frustration mentions are in-server negativity that never @-mentioned Pip — detail on the Errors tab.</p>`)}
+    ${removed.length ? card('Removed servers', table(['Server', 'Guild ID', 'Installed', 'Removed'], removedRows)) : ''}`;
+  return R.shell({ title: 'pip · admin — users · servers', active: 'users', body, updated: new Date() });
+}
+
 // ---- 6. Errors & health ----------------------------------------------------
+// Refresh interval mirrors HEARTBEAT_INTERVAL_MS in src/adapters/{discord,
+// telegram}.ts (60s); 2.5x that is generous enough to not false-positive on a
+// slow tick while still catching a real stall promptly.
+const HEARTBEAT_STALE_MS = 150_000;
+
 async function viewErrors() {
   const rows = await D.loadUsage(7);
   // Safety-backstop firings (durable channel, migration 0011). Best-effort:
-  // an env whose DB predates the table shouldn't 500 the whole errors view.
+  // an env whose DB predates a table shouldn't 500 the whole errors view.
   const safety = await D.loadSafetyEvents(7).catch(() => []);
+  const heartbeat = await D.loadHeartbeat().catch(() => []);
+  const sentiment = await D.loadSentimentEvents(7).catch(() => []);
+  const negFeedback = await D.loadFeedback(7).then((f) => f.filter((x) => x.rating === 'down')).catch(() => []);
+  const flaggedConvos = await D.loadConversationsByMessageIds(negFeedback.map((f) => f.message_id)).catch(() => []);
+  const convoByMsgId = new Map(flaggedConvos.map((c) => [String(c.message_id), c]));
   const failed = rows.filter((r) => r.failed);
   const failRate = rows.length ? failed.length / rows.length : 0;
   const degraded = rows.filter((r) => r.degraded).length;
@@ -665,12 +830,54 @@ async function viewErrors() {
   const signalCount = safety.filter((s) => s.kind === 'signal_language').length;
   const safetyRecent = safety.slice(0, 30).map((s) =>
     `<tr><td class="muted" style="white-space:nowrap">${ago(s.created_at)}</td><td><span class="pill">${esc(s.platform)}</span></td><td class="mono">${shortId(s.user_id)}</td><td><span class="pill">${esc(s.kind)}</span></td><td><div class="trunc" title="${esc(s.detail || '')}">${esc(s.detail || '—')}</div></td></tr>`).join('');
+
+  // System health — real online/offline (bot_heartbeat) instead of inferring
+  // it from recent traffic, which reads "fine" during a genuine quiet spell.
+  const now = Date.now();
+  const hbByPlatform = new Map(heartbeat.map((h) => [h.platform, h.last_seen]));
+  const platforms = [...hbByPlatform.keys()];
+  const isUp = (p) => now - new Date(hbByPlatform.get(p)).getTime() < HEARTBEAT_STALE_MS;
+  const allOnline = platforms.length > 0 && platforms.every(isUp);
+  const healthDetail = platforms.length
+    ? platforms.map((p) => `${p} ${isUp(p) ? 'online' : `offline · last seen ${ago(hbByPlatform.get(p))}`}`).join(' · ')
+    : 'no heartbeat recorded yet';
+
+  // Repeat red-team offenders — the same user hitting a backstop repeatedly,
+  // which the flat "recent events" list below doesn't make obvious on its own.
+  const offenderBy = new Map();
+  for (const s of safety) {
+    if (!['prompt_leak', 'signal_language', 'injection_attempt'].includes(s.kind)) continue;
+    const k = `${s.platform}:${s.user_id}`;
+    if (!offenderBy.has(k)) offenderBy.set(k, { platform: s.platform, userId: s.user_id, guildId: s.guild_id, count: 0, kinds: new Set(), last: s.created_at });
+    const o = offenderBy.get(k);
+    o.count += 1;
+    o.kinds.add(s.kind);
+    if (s.created_at > o.last) o.last = s.created_at;
+  }
+  const offenders = [...offenderBy.values()].filter((o) => o.count > 1).sort((a, b) => b.count - a.count).slice(0, 20);
+  const offenderRows = offenders.map((o) =>
+    `<tr><td><a class="rowlink mono" href="/users?id=${encodeURIComponent(o.userId)}">${esc(shortId(o.userId))}</a></td><td class="muted mono" style="font-size:11px">${esc(o.guildId)}</td><td class="mono">${o.count}</td><td class="muted">${[...o.kinds].join(', ')}</td><td class="muted">${ago(o.last)}</td></tr>`).join('');
+
+  // In-server frustration mentions that never @-mention Pip — see
+  // src/beta/sentiment.ts. This is the case that otherwise leaves zero trace.
+  const sentimentRows = sentiment.slice(0, 30).map((s) =>
+    `<tr><td class="muted" style="white-space:nowrap">${ago(s.created_at)}</td><td class="mono muted" style="font-size:11px">${esc(s.guild_id)}</td><td><a class="rowlink mono" href="/users?id=${encodeURIComponent(s.user_id)}">${esc(shortId(s.user_id))}</a></td><td class="mono">${esc((s.matched_terms || []).join(', '))}</td><td><div class="trunc" title="${esc(s.excerpt || '')}">${esc(s.excerpt || '—')}</div></td></tr>`).join('');
+
+  // Negative feedback with the actual flagged answer, where the linkage
+  // (conversations.message_id) reaches back that far.
+  const feedbackRows = negFeedback.slice(0, 30).map((f) => {
+    const convo = convoByMsgId.get(String(f.message_id));
+    return `<tr><td class="muted" style="white-space:nowrap">${ago(f.created_at)}</td><td class="mono muted" style="font-size:11px">${esc(f.guild_id)}</td><td class="mono">${esc(shortId(f.rater_id))}</td>
+      <td><div class="trunc" title="${esc(convo ? convo.question : '')}">${convo ? esc(convo.question) : '<span class="muted">text unavailable — predates linkage</span>'}</div></td>
+      <td><div class="trunc muted" title="${esc(convo ? convo.answer : '')}">${convo ? esc((convo.answer || '').replace(/\s+/g, ' ').slice(0, 160)) : ''}</div></td></tr>`;
+  }).join('');
+
   const body = `
     <div class="grid4">
+      ${stat('Pip status', allOnline ? '<span class="ok">online</span>' : '<span class="bad">offline</span>', healthDetail)}
       ${stat('Failure rate · 7d', pct(failRate), `${failed.length} / ${rows.length}`)}
       ${stat('p95 latency', p95Lat == null ? '—' : `${(p95Lat / 1000).toFixed(1)}s`, '<10s target')}
       ${stat('Degraded turns', String(degraded), 'budget ≥80%')}
-      ${stat('Messages · 7d', rows.length.toLocaleString())}
     </div>
     ${card('Failure rate · last 7 days', `<div class="chart">${days.map((d) => `<div class="col"><div class="bar" style="height:${Math.max(2, (d.f / maxF) * 120)}px;background:${d.f > 0.1 ? 'var(--clay)' : 'var(--green)'}" title="${pct(d.f)} of ${d.n}"></div><div class="tick">${d.day.slice(5)}</div></div>`).join('')}</div>`)}
     <div class="grid2">
@@ -691,9 +898,14 @@ async function viewErrors() {
       </tbody></table>`)}
       ${card('What these are', `<div class="muted" style="line-height:1.5">
         <b>Prompt-leak</b>: output matched a system-prompt signature and was hard-swapped for a safe refusal.<br>
-        <b>Signal-language</b>: answer contained imperative "buy/sell now" phrasing — logged only, never rewritten.
+        <b>Signal-language</b>: answer contained imperative "buy/sell now" phrasing — logged only, never rewritten.<br>
+        <b>Injection attempt</b>: input matched jailbreak phrasing — logged only, the answer itself proceeds normally.<br>
+        <b>Frustration mention</b>: in-server negativity about Pip that never @-mentioned it — keyword match only, see below.
       </div>`)}
     </div>
-    ${card('Recent safety events', table(['When', 'Platform', 'User', 'Kind', 'Detail'], safetyRecent))}`;
+    ${card('Repeat red-team offenders · 7d (2+ backstop hits)', table(['User', 'Guild', 'Attempts', 'Kinds', 'Last'], offenderRows))}
+    ${card('Recent safety events', table(['When', 'Platform', 'User', 'Kind', 'Detail'], safetyRecent))}
+    <div id="frustration">${card('Recent frustration mentions · 7d — never @-mentioned Pip', table(['When', 'Guild', 'User', 'Matched terms', 'Excerpt'], sentimentRows))}</div>
+    ${card('Negative feedback (👎) · 7d — flagged answers', table(['When', 'Guild', 'Rater', 'Question', 'Answer'], feedbackRows))}`;
   return R.shell({ title: 'pip · admin — errors', active: 'errors', body, updated: new Date(), refresh: true });
 }
