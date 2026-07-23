@@ -605,6 +605,12 @@ export interface GateDecision {
   replyText?: string;
   /** When blocked silently (wrong channel, cooldown): drop without replying. */
   silent?: boolean;
+  /**
+   * Server cap/lapse blocks: DM this text to the user instead of nagging the
+   * channel. The adapter tries once; if their DMs are closed it drops silently.
+   * Set at most once per user per day (see serverBlock) so repeats never spam.
+   */
+  dmText?: string;
   /** Per-request feature budget handed to the agent when allowed. */
   features: { web: boolean; vision: boolean; scan: boolean };
   degraded: boolean;
@@ -623,6 +629,21 @@ const ALLOW_ALL: GateDecision = {
 };
 
 const lastMessageAt = new Map<string, number>(); // userKey -> ms (cooldown)
+const lastNudgeAt = new Map<string, number>(); // userKey -> ms (server DM nudge)
+const DM_NUDGE_TTL_MS = 24 * 60 * 60 * 1000; // at most one server-block DM per user/day
+
+/**
+ * A server-context block: never nag the channel. DM the user the reason at most
+ * once per day (the adapter drops it silently if their DMs are closed), and drop
+ * the message silently otherwise. Keeps a hit-limit user from spamming the
+ * server AND from being publicly pay-walled in front of everyone.
+ */
+function serverBlock(userKey: string, now: number, text: string): GateDecision {
+  const last = lastNudgeAt.get(userKey) ?? 0;
+  const dmText = now - last >= DM_NUDGE_TTL_MS ? text : undefined;
+  if (dmText) lastNudgeAt.set(userKey, now);
+  return { allow: false, silent: true, dmText, features: { web: false, vision: false, scan: false }, degraded: false };
+}
 
 /**
  * The single pre-LLM checkpoint. Returns a decision the adapter acts on BEFORE
@@ -690,6 +711,18 @@ export async function betaGate(msg: NormalizedMessage): Promise<GateDecision> {
     if (guilds.size && listCoversPlatform && !guilds.has(msg.guildId)) return blockedSilent('guild allowlist', msg);
     const channels = csvSet(cfg.BETA_ALLOWED_CHANNELS);
     if (channels.size && msg.channelId && !channels.has(msg.channelId)) return blockedSilent('channel allowlist', msg);
+    // Community server ONLY: confine Pip to #ask-pip so it isn't @-mentioned
+    // (and billed) across every channel of a busy free community. Silent drop
+    // elsewhere — no channel nag. Other servers are untouched.
+    if (
+      cfg.PIP_COMMUNITY_GUILD_ID &&
+      cfg.PIP_COMMUNITY_CHANNEL_ID &&
+      msg.guildId === cfg.PIP_COMMUNITY_GUILD_ID &&
+      msg.channelId &&
+      msg.channelId !== cfg.PIP_COMMUNITY_CHANNEL_ID
+    ) {
+      return blockedSilent('community channel restriction', msg);
+    }
   }
 
   // 2b. Personal trial window (user decision 2026-07-07): 7 free days, then ONE
@@ -749,8 +782,11 @@ export async function betaGate(msg: NormalizedMessage): Promise<GateDecision> {
       .filter((r) => r.guild_id === msg.guildId)
       .reduce((s, r) => s + Number(r.cost_usd), 0);
     if (guildSpend >= cfg.BETA_GUILD_DAILY_SPEND_USD) {
-      return blocked(
-        "This server's daily Pip budget is spent — back at midnight UTC. DMs still work in the meantime 🌱",
+      // DM-not-public, same as the other server-context blocks.
+      return serverBlock(
+        userKey,
+        now,
+        "That server's daily Pip budget is spent for today, back at midnight UTC 🌱 DMs still work in the meantime.",
       );
     }
   }
@@ -778,13 +814,25 @@ export async function betaGate(msg: NormalizedMessage): Promise<GateDecision> {
         return blocked("You've used today's Pip budget, it resets at midnight UTC 🌱");
       }
     } else {
+      // Server context. Every block here is DM-not-public (serverBlock): a
+      // hit-limit user is never pay-walled in front of the whole server.
       const access = guildAccess(await getGuildPlan(msg.guildId), now);
       if (!access.ok) {
-        return blocked(`This server's free trial is up 🌱 To keep Pip here, ${payLine()}`);
+        return serverBlock(userKey, now, `Pip's free trial in that server is up 🌱 To keep Pip there, an admin can ${payLine()}`);
+      }
+      // Per-user ceiling within the server: one member can't drain the shared
+      // guild allowance (and it bounds spam in a free/comped community).
+      const myGuildToday = mine.filter((r) => r.guild_id === msg.guildId).length;
+      if (myGuildToday >= CAPS.perGuildUser.dailyMsgs) {
+        return serverBlock(
+          userKey,
+          now,
+          "You've hit your daily Pip limit in that server 🌱 It resets at midnight UTC. Want your own plan? DM me and I'll sort it.",
+        );
       }
       const guildToday = rows.filter((r) => r.guild_id === msg.guildId).length;
       const block = await planBlock(access.plan, { guild_id: msg.guildId }, guildToday, true);
-      if (block) return blocked(block);
+      if (block) return serverBlock(userKey, now, block);
     }
   }
 

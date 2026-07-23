@@ -95,6 +95,10 @@ const Schema = z
     // indistinguishable from a spam bot and is a fast route to being banned.
     // Requires the SERVER MEMBERS privileged intent in the Discord dev portal.
     PIP_COMMUNITY_GUILD_ID: z.string().optional(),
+    // In the community server ONLY, confine Pip to this one channel (#ask-pip) so
+    // it isn't @-mentioned (and billed) across every channel. Other servers are
+    // unaffected. Set to the #ask-pip channel id.
+    PIP_COMMUNITY_CHANNEL_ID: z.string().optional(),
   })
   .superRefine((cfg, ctx) => {
     // A lone Discord token or app id means the adapter can't start — flag it

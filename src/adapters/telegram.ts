@@ -233,7 +233,14 @@ export class TelegramAdapter implements PlatformAdapter {
       // Beta gate — allowlist / caps / kill-switch — BEFORE any LLM call.
       const gate = await betaGate(msg);
       if (!gate.allow) {
-        if (!gate.silent && gate.replyText) await this.send(ctx, gate.replyText);
+        if (gate.dmText) {
+          // Group cap/lapse: DM the user once instead of nagging the group. On
+          // Telegram a DM only lands if they've started the bot; if not, it
+          // throws and we drop silently — never spam the group.
+          void this.pushUser(msg.userId, gate.dmText).catch(() => {});
+        } else if (!gate.silent && gate.replyText) {
+          await this.send(ctx, gate.replyText);
+        }
         return;
       }
 

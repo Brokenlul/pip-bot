@@ -549,7 +549,13 @@ export class DiscordAdapter implements PlatformAdapter {
       // Cost + access gate — caps / kill-switch — BEFORE any LLM call.
       const gate = await betaGate(msg);
       if (!gate.allow) {
-        if (!gate.silent && gate.replyText) await this.send(message, gate.replyText);
+        if (gate.dmText) {
+          // Server cap/lapse: DM the user once instead of nagging the channel.
+          // If their DMs are closed, drop silently — never spam the server.
+          void this.dmUser(msg.userId, gate.dmText).catch(() => {});
+        } else if (!gate.silent && gate.replyText) {
+          await this.send(message, gate.replyText);
+        }
         return;
       }
 
