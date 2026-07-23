@@ -120,7 +120,11 @@ export const virtualsLaunchesTool: Tool<Input, Out> = {
       const params = new URLSearchParams();
       params.set('pagination[pageSize]', String(fetchSize));
       params.set('pagination[page]', '1');
+      // The API 400s ("Cannot set properties of undefined (setting 'chain')")
+      // if no chain filter is sent at all, so the all-chains case still needs
+      // a chain param, a $ne against a sentinel matches every real chain.
       if (chain) params.set('filters[chain]', chain);
+      else params.set('filters[chain][$ne]', 'NONE');
       if (q) {
         if (isAddress(q)) params.set('filters[tokenAddress]', q);
         else params.set('filters[name][$containsi]', q);
