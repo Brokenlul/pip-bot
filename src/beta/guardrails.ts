@@ -2,7 +2,14 @@ import { createHash } from 'node:crypto';
 import { getDb } from '../memory/db.js';
 import { getConfig, betaModeEnabled, csvSet } from '../config.js';
 import { NormalizedMessage } from '../adapters/platform.js';
-import { CAPS } from './caps.js';
+import {
+  CAPS,
+  PLAN_CAPS,
+  TRIAL_PERSONAL,
+  TRIAL_SERVER,
+  TRIAL_DAYS,
+  type PlanCaps,
+} from './caps.js';
 
 // ---- Cost model ($/1M tokens) ---------------------------------------------
 // Cache read is ~0.1x input; cache write ~1.25x. Web search is ~$10 / 1,000.
@@ -178,12 +185,64 @@ async function todayUsage(): Promise<TodayRow[]> {
   return (data ?? []) as TodayRow[];
 }
 
-/** The slice of a beta_testers row the gate needs (trial window + extension). */
+function monthStartUtc(): Date {
+  const d = new Date();
+  return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1));
+}
+
+interface GuildPlan {
+  server_tier: string | null;
+  server_access_until: string | null;
+  created_at: string | null;
+}
+
+/** Per-guild plan state (Server Pro). Null when the guild row isn't found. */
+async function getGuildPlan(guildId: string): Promise<GuildPlan | null> {
+  const db = getDb();
+  if (!db) return null;
+  const { data, error } = await db
+    .from('guilds')
+    .select('server_tier, server_access_until, created_at')
+    .eq('id', guildId)
+    .limit(1);
+  if (error) {
+    console.warn(`[beta] getGuildPlan: ${error.message}`);
+    return null;
+  }
+  return (data?.[0] as GuildPlan | undefined) ?? null;
+}
+
+/**
+ * Count usage_log rows for one scope (a user OR a guild), optionally since a
+ * timestamp. Used for the monthly cap (since month start) and the trial total
+ * (no lower bound — a trial scope's rows are all within its 7-day window).
+ * head:true keeps it a cheap COUNT with no row transfer.
+ */
+async function usageCountForScope(
+  scope: { user_id: string } | { guild_id: string },
+  sinceIso?: string,
+): Promise<number> {
+  const db = getDb();
+  if (!db) return 0;
+  const [col, val] = 'user_id' in scope ? ['user_id', scope.user_id] : ['guild_id', scope.guild_id];
+  let q = db.from('usage_log').select('id', { count: 'exact', head: true }).eq(col, val);
+  if (sinceIso) q = q.gte('created_at', sinceIso);
+  const { count, error } = await q;
+  if (error) {
+    console.warn(`[beta] usageCountForScope: ${error.message}`);
+    return 0;
+  }
+  return count ?? 0;
+}
+
+/** The slice of a beta_testers row the gate needs (trial window + plan). */
 interface TesterRow {
   access_until: string | null;
   extension_used: boolean;
+  tier?: string | null;
+  subscription_status?: string | null;
 }
-const TESTER_COLS = 'access_until, extension_used';
+const TESTER_COLS = 'access_until, extension_used, tier, subscription_status';
 
 async function getTester(platform: string, platformId: string): Promise<TesterRow | null> {
   const db = getDb();
@@ -469,6 +528,75 @@ function payLine(): string {
   return 'paid access is live now, ask in the server for the checkout link.';
 }
 
+// ---- Plan resolution + enforcement (2026-07-24) ----------------------------
+
+/** The personal plan for a DM: an active personal subscription, else the trial. */
+function personalPlan(tester: TesterRow): PlanCaps {
+  const tier = tester.tier ?? '';
+  const active = tester.subscription_status === 'active';
+  if (active && (tier === 'personal-lite' || tier === 'personal-pro' || tier === 'elite')) {
+    return PLAN_CAPS[tier]!;
+  }
+  return TRIAL_PERSONAL;
+}
+
+/**
+ * Server access + plan for a guild. Server plans are per-GUILD: an active
+ * Server Pro subscription (server_access_until in the future), else the guild's
+ * 7-day trial (created_at + TRIAL_DAYS). `ok:false` means the guild's trial
+ * lapsed with no paid plan — nudge them to Server Pro.
+ */
+function guildAccess(gp: GuildPlan | null, now: number): { ok: boolean; plan: PlanCaps } {
+  const paidUntil = gp?.server_access_until ? new Date(gp.server_access_until).getTime() : 0;
+  const tier = gp?.server_tier ?? '';
+  if (paidUntil > now && (tier === 'server-pro' || tier === 'elite') && PLAN_CAPS[tier]) {
+    return { ok: true, plan: PLAN_CAPS[tier]! };
+  }
+  // Free guild trial from first-seen. Unknown created_at (older rows) fails OPEN
+  // to trial caps rather than locking out an active server; the global +
+  // per-guild spend caps still bound cost.
+  const created = gp?.created_at ? new Date(gp.created_at).getTime() : null;
+  const trialEnds = created != null ? created + TRIAL_DAYS * 86_400_000 : null;
+  if (trialEnds == null || now < trialEnds) return { ok: true, plan: TRIAL_SERVER };
+  return { ok: false, plan: TRIAL_SERVER };
+}
+
+/**
+ * Enforce a plan's message caps for a scope (a user in DMs, a guild in servers).
+ * Returns a block message when a cap is hit, else null. Daily count is passed in
+ * (already read from today's rows); monthly + trial-total are cheap COUNT hops
+ * that only run when the plan actually has those caps.
+ */
+async function planBlock(
+  plan: PlanCaps,
+  scope: { user_id: string } | { guild_id: string },
+  todayCount: number,
+  isServer: boolean,
+): Promise<string | null> {
+  if (todayCount >= plan.daily) {
+    return isServer
+      ? "This server's hit its daily Pip limit, resets at midnight UTC 🌱"
+      : "You've hit today's limit, it resets at midnight UTC 🌱";
+  }
+  if (plan.monthly != null) {
+    const used = await usageCountForScope(scope, monthStartUtc().toISOString());
+    if (used >= plan.monthly) {
+      return isServer
+        ? `This server has used its ${plan.label} monthly allowance (${plan.monthly}). Resets on the 1st, UTC 🌱`
+        : `You've used your ${plan.label} monthly allowance (${plan.monthly}). Resets on the 1st, UTC 🌱`;
+    }
+  }
+  if (plan.trialTotal != null) {
+    const used = await usageCountForScope(scope);
+    if (used >= plan.trialTotal) {
+      return isServer
+        ? `This server's free trial is used up (${plan.trialTotal} messages). To keep Pip here, ${payLine()}`
+        : `Your free trial is used up (${plan.trialTotal} messages). To keep going, ${payLine()}`;
+    }
+  }
+  return null;
+}
+
 // ---- The gate --------------------------------------------------------------
 
 export interface GateDecision {
@@ -564,17 +692,17 @@ export async function betaGate(msg: NormalizedMessage): Promise<GateDecision> {
     if (channels.size && msg.channelId && !channels.has(msg.channelId)) return blockedSilent('channel allowlist', msg);
   }
 
-  // 2b. Per-user trial window (user decision 2026-07-07): 7 free days, then
-  //     ONE extra week for tweeting about Pip (link pasted in chat, verified
-  //     manually by the founder), then paid. Checked before the cooldown so a
-  //     pasted tweet link is never silently dropped.
+  // 2b. Personal trial window (user decision 2026-07-07): 7 free days, then ONE
+  //     extra week for tweeting about Pip, then paid. This governs PERSONAL (DM)
+  //     access only — a Server Pro member must not be blocked in the server by
+  //     their own lapsed personal trial (server access is the guild's plan, at
+  //     the cap stage below). The claim/merge runs in any context so a paid
+  //     grant under their @handle is always picked up.
   if (accessLapsed(tester, now)) {
-    // A paid checkout grant may be waiting under their @handle — claim/merge it
-    // before nudging. If it un-lapses them, the next check falls through to serve.
     const upgraded = await claimHandleRow(msg, tester);
     if (upgraded) tester = upgraded;
   }
-  if (accessLapsed(tester, now)) {
+  if (isDM && accessLapsed(tester, now)) {
     const tweetUrl = msg.text.match(TWEET_URL_RE)?.[0];
     if (tweetUrl && !tester.extension_used) {
       if (await grantTweetExtension(msg, tweetUrl)) {
@@ -637,12 +765,26 @@ export async function betaGate(msg: NormalizedMessage): Promise<GateDecision> {
   const mine = rows.filter((r) => r.user_id === msg.userId);
 
   if (!isFounder) {
-    if (mine.length >= cfg.BETA_USER_DAILY_MSGS) {
-      return blocked("You've hit today's limit, it resets at midnight UTC. This keeps Pip running for everyone 🌱");
-    }
-    const mySpend = mine.reduce((s, r) => s + Number(r.cost_usd), 0);
-    if (mySpend >= cfg.BETA_USER_DAILY_SPEND_USD) {
-      return blocked("You've used today's Pip budget, it resets at midnight UTC 🌱");
+    // Plan- and context-aware caps (2026-07-24). Personal plans are enforced
+    // PER USER (DMs); server plans PER GUILD (shared). Each plan carries a daily
+    // cap plus, where applicable, a monthly allowance and a hard trial total.
+    if (isDM) {
+      const block = await planBlock(personalPlan(tester), { user_id: msg.userId }, mine.length, false);
+      if (block) return blocked(block);
+      // Per-user daily SPEND backstop — bounds an expensive burst that stays
+      // under the message count cap (the plan caps are message-count based).
+      const mySpend = mine.reduce((s, r) => s + Number(r.cost_usd), 0);
+      if (mySpend >= cfg.BETA_USER_DAILY_SPEND_USD) {
+        return blocked("You've used today's Pip budget, it resets at midnight UTC 🌱");
+      }
+    } else {
+      const access = guildAccess(await getGuildPlan(msg.guildId), now);
+      if (!access.ok) {
+        return blocked(`This server's free trial is up 🌱 To keep Pip here, ${payLine()}`);
+      }
+      const guildToday = rows.filter((r) => r.guild_id === msg.guildId).length;
+      const block = await planBlock(access.plan, { guild_id: msg.guildId }, guildToday, true);
+      if (block) return blocked(block);
     }
   }
 
