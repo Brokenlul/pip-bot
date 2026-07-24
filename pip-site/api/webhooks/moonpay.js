@@ -22,11 +22,16 @@ export default async function handler(req) {
   if (req.method !== 'POST') return new Response('method not allowed', { status: 405 });
 
   const raw = await req.text();
-  const ok = await verifyMoonpayWebhook(req.headers, raw, {
+  const verdict = await verifyMoonpayWebhook(req.headers, raw, {
     token: process.env.MOONPAY_WEBHOOK_TOKEN,
     secret: process.env.MOONPAY_WEBHOOK_SECRET,
   });
-  if (!ok) return new Response('invalid signature', { status: 401 });
+  if (!verdict.ok) {
+    // Log WHY. A silent 401 here cost a real sale on 2026-07-24: MoonPay retried
+    // six times, every delivery was rejected, and nothing said what mismatched.
+    console.error(`[moonpay] REJECTED delivery: ${verdict.reason}`);
+    return new Response('invalid signature', { status: 401 });
+  }
 
   let evt;
   try { evt = JSON.parse(raw); } catch { return new Response('invalid json', { status: 400 }); }

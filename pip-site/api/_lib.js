@@ -83,46 +83,73 @@ export async function verifyLoopWebhook(headers, rawBody, secret) {
 }
 
 /**
- * Verify a MoonPay Commerce webhook. Commerce supports two auth schemes depending
- * on how the webhook was created, so we accept whichever env is configured:
- *   - Shared bearer token: an `Authorization: Bearer <token>` header issued at
- *     webhook creation (set MOONPAY_WEBHOOK_TOKEN).
- *   - Signature: a `Moonpay-Signature-V2: t=<ts>,s=<hexsig>` header — HMAC-SHA256
- *     over `<ts>.<rawBody>`, hex-encoded, keyed by the per-webhook secret
- *     (set MOONPAY_WEBHOOK_SECRET).
- * Fails closed: if neither env is set, nothing can pass. If both are set, either
- * one passing is enough (lets you migrate schemes without a gap).
+ * Verify a MoonPay Commerce (Helio) webhook.
+ *
+ * Helio delivers BOTH of these on every call, keyed by the same `sharedToken`
+ * that its dashboard/API hands you once at webhook-creation time:
+ *   - `Authorization: Bearer <sharedToken>`
+ *   - `X-Signature: <hex HMAC-SHA256 of the RAW BODY>`  (no timestamp prefix)
+ * Either env may hold that token; both are compared against both schemes so a
+ * value in the "wrong" one still verifies.
+ *
+ * A 2026-07-24 live payment was lost because this function only understood
+ * `Moonpay-Signature-V2: t=..,s=..` over `<ts>.<body>` — that is MoonPay's ramp
+ * API scheme, which Commerce never sends. Six deliveries 401'd and the buyer got
+ * no access. The V2 branch is kept (harmless, and covers a future migration),
+ * but X-Signature is the one Commerce actually uses.
+ *
+ * Fails closed: with no env configured nothing can pass. Returns a reason so the
+ * caller can log WHY a rejection happened without leaking secrets.
  */
 export async function verifyMoonpayWebhook(headers, rawBody, { token, secret }) {
+  const candidates = [token, secret].filter(Boolean);
+  if (!candidates.length) return { ok: false, reason: 'no MOONPAY_WEBHOOK_TOKEN/SECRET configured' };
+
   // 1) Shared bearer token.
-  if (token) {
-    const presented = (headers.get('authorization') || '').replace(/^Bearer\s+/i, '').trim();
-    if (presented && safeEqual(presented, token)) return true;
-  }
-  // 2) Moonpay-Signature-V2 HMAC.
-  if (secret) {
-    const header = headers.get('moonpay-signature-v2');
-    if (header) {
-      let ts, sig;
-      for (const kv of header.split(',')) {
-        const i = kv.indexOf('=');
-        if (i < 0) continue;
-        const k = kv.slice(0, i).trim();
-        const v = kv.slice(i + 1).trim();
-        if (k === 't') ts = v;
-        else if (k === 's') sig = v.toLowerCase();
+  const presented = (headers.get('authorization') || '').replace(/^Bearer\s+/i, '').trim();
+  if (presented && candidates.some((c) => safeEqual(presented, c))) return { ok: true, via: 'bearer' };
+
+  // 2) X-Signature: HMAC-SHA256 over the raw body. Accept hex or base64, with or
+  //    without a `sha256=` prefix, so an encoding nuance can't drop a live event.
+  const xsig = (headers.get('x-signature') || headers.get('helio-signature') || '').trim();
+  if (xsig) {
+    const received = xsig.includes('=') && !xsig.endsWith('=') ? xsig.split('=').pop().trim() : xsig;
+    for (const c of candidates) {
+      const mac = await hmac(enc.encode(c), rawBody);
+      if (safeEqual(received.toLowerCase(), toHex(mac)) || safeEqual(received, toBase64(mac))) {
+        return { ok: true, via: 'x-signature' };
       }
-      if (ts && sig) {
-        // Reject stale deliveries (replay window: 5 minutes).
-        const age = Math.abs(Date.now() / 1000 - Number(ts));
-        if (Number.isFinite(age) && age <= 300) {
-          const expected = toHex(await hmac(enc.encode(secret), `${ts}.${rawBody}`));
-          if (safeEqual(sig, expected)) return true;
+    }
+  }
+
+  // 3) Legacy Moonpay-Signature-V2 (ramp-style), kept for forward compatibility.
+  const v2 = headers.get('moonpay-signature-v2');
+  if (v2) {
+    let ts, sig;
+    for (const kv of v2.split(',')) {
+      const i = kv.indexOf('=');
+      if (i < 0) continue;
+      const k = kv.slice(0, i).trim();
+      const v = kv.slice(i + 1).trim();
+      if (k === 't') ts = v;
+      else if (k === 's') sig = v.toLowerCase();
+    }
+    if (ts && sig) {
+      // Reject stale deliveries (replay window: 5 minutes).
+      const age = Math.abs(Date.now() / 1000 - Number(ts));
+      if (Number.isFinite(age) && age <= 300) {
+        for (const c of candidates) {
+          const expected = toHex(await hmac(enc.encode(c), `${ts}.${rawBody}`));
+          if (safeEqual(sig, expected)) return { ok: true, via: 'moonpay-signature-v2' };
         }
       }
     }
   }
-  return false;
+
+  // Header NAMES only — never values, which are the signatures themselves.
+  const seen = ['authorization', 'x-signature', 'helio-signature', 'moonpay-signature-v2']
+    .filter((h) => headers.get(h));
+  return { ok: false, reason: `no scheme matched; auth headers present: ${seen.join(', ') || 'none'}` };
 }
 
 // ---- access grant (Supabase REST) ------------------------------------------

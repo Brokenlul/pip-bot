@@ -232,10 +232,19 @@ async function fetchMoonpay() {
   if (!pub || !sec) return { ok: false, payments: [] };
   const h = { Authorization: `Bearer ${sec}`, Origin: 'https://pipinvest.xyz' };
   const out = [];
+  const failures = [];
   try {
     await Promise.all(MOONPAY_PAYLINKS.map(async (pl) => {
-      const r = await fetch(`https://api.hel.io/v1/paylink/${pl.id}/transactions?publicKey=${pub}`, { headers: h });
-      if (!r.ok) return;
+      // `apiKey`, not `publicKey` — the param name the charge API (which is
+      // confirmed working in pip-site/api/checkout/moonpay.js) uses. With the
+      // wrong name every call 401s, and the old silent `return` meant a real
+      // paid transaction simply never appeared in this console.
+      const r = await fetch(`https://api.hel.io/v1/paylink/${pl.id}/transactions?apiKey=${pub}`, { headers: h });
+      if (!r.ok) {
+        failures.push(`${pl.slug}/${pl.billing}: HTTP ${r.status}`);
+        console.error(`[admin] moonpay ${pl.slug}/${pl.billing} transactions: HTTP ${r.status}`);
+        return;
+      }
       const list = await r.json();
       for (const t of Array.isArray(list) ? list : (list.items || [])) {
         const meta = t.meta || t.paymentRequest || {};
@@ -252,10 +261,14 @@ async function fetchMoonpay() {
         });
       }
     }));
-    return { ok: true, payments: out };
+    // Every pay link erroring means the credentials/param are wrong, not that
+    // there were no sales — report that as not-ok so the console can say so
+    // rather than rendering a confident, empty revenue table.
+    const allFailed = failures.length === MOONPAY_PAYLINKS.length;
+    return { ok: !allFailed, payments: out, failures };
   } catch (e) {
     console.error('[admin] moonpay fetch:', e.message);
-    return { ok: false, payments: out };
+    return { ok: false, payments: out, failures: [e.message] };
   }
 }
 
