@@ -7,7 +7,7 @@ Conventions for any Claude Code session in this repo. Read `BUILD_GOAL.md` for t
 - Node.js 22+, TypeScript, ES modules.
 - `discord.js` v14, `@anthropic-ai/sdk`, `@supabase/supabase-js`, `zod`, `p-retry`.
 - Supabase (Postgres + pgvector) for memory and semantic cache. No Redis in MVP.
-- Sonnet-class model for the answer (`ANSWER_MODEL`, default `claude-sonnet-4-6`). A conservative Haiku fast-path is allowed (unlocked 2026-07-24): `SIMPLE_ANSWER_MODEL` (default `claude-haiku-4-5`) answers ONLY unambiguously-simple asks (bare price, next FOMC/CPI) via a keyword/shape heuristic in `src/core/route.ts`; anything with an image, an active thread, a reply, or analysis/trade words stays on Sonnet. Keep the routing conservative — a mis-route to Haiku degrades the answer.
+- Sonnet-class model for the answer (`ANSWER_MODEL`, default `claude-sonnet-4-6`). A conservative Haiku fast-path exists but is **OFF by default** (disabled 2026-07-24, same day it shipped): it answered "next fed meeting" from parametric memory with a wrong date and `tools_used: []`, and cost ~3x Sonnet because a per-model prompt cache never stays warm at its traffic share. Enable only via `SIMPLE_ROUTING_ENABLED=true`, and read the header comment in `src/core/route.ts` first. Calendar/next-event asks are permanently excluded from the cheap path. Keep any routing conservative — a mis-route to Haiku degrades the answer.
 
 ## Layout
 

@@ -43,8 +43,17 @@ const Schema = z
   PAUL_API_KEY: z.string().optional(),
 
   ANSWER_MODEL: z.string().default('claude-sonnet-4-6'),
-  // Conservative Haiku fast-path (unlocked 2026-07-24). Answers only
-  // unambiguously-simple asks (bare price, next FOMC/CPI) — see src/core/route.ts.
+  // Haiku fast-path master switch. OFF by default: on 2026-07-24 it answered
+  // "next fed meeting" from memory with a wrong date and no tool call, and cost
+  // ~3x Sonnet because a per-model prompt cache never stays warm at its traffic
+  // share. Read the header of src/core/route.ts before flipping this on.
+  // Strict parse (same rationale as BETA_MODE): only "true"/"1" enable it.
+  SIMPLE_ROUTING_ENABLED: z
+    .string()
+    .default('false')
+    .transform((v) => ['true', '1'].includes(v.trim().toLowerCase())),
+  // Cheap model used only when SIMPLE_ROUTING_ENABLED is on. Answers only
+  // unambiguously-simple asks (bare price) — see src/core/route.ts.
   // Set equal to ANSWER_MODEL (or empty) to disable routing entirely.
   SIMPLE_ANSWER_MODEL: z.string().default('claude-haiku-4-5'),
   // Cheap model for distilling the per-trader learning profile (background,

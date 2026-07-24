@@ -473,9 +473,10 @@ export async function answer(msg: NormalizedMessage, opts: AnswerOptions = {}): 
       }).catch(() => [])
     : [];
 
-  // Conservative Haiku fast-path: an unambiguously-simple ask (bare price, next
-  // FOMC/CPI) with no image, no active thread, and no reply goes to the cheap
-  // model; everything else stays on the strong model. See src/core/route.ts.
+  // Haiku fast-path, OFF unless SIMPLE_ROUTING_ENABLED=true. When on, only an
+  // unambiguously-simple ask (bare price) with no image, no active thread, and
+  // no reply goes to the cheap model; calendar/next-event asks and everything
+  // else stay on the strong model. See src/core/route.ts.
   const answerModel = pickAnswerModel({
     text: questionText,
     hasImages,
