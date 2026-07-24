@@ -173,15 +173,8 @@ const TIER = {
   'personal-pro': { m: 20.9, y: 211.2, label: 'Pro' },
   'server-pro': { m: 31.9, y: 316.8, label: 'Server Pro' },
 };
-// MoonPay pay link id -> plan, so we can label its transactions.
-const MOONPAY_PAYLINKS = [
-  { id: '6a58aff5d0dad167e323adb7', slug: 'personal-lite', billing: 'monthly' },
-  { id: '6a58aff62e504e36f03c3311', slug: 'personal-lite', billing: 'yearly' },
-  { id: '6a58aff7f02c0392e33c23f9', slug: 'personal-pro', billing: 'monthly' },
-  { id: '6a58aff82a35ae41a9ec224b', slug: 'personal-pro', billing: 'yearly' },
-  { id: '6a58aff926ebf2b46dfda976', slug: 'server-pro', billing: 'monthly' },
-  { id: '6a58aff917d45c0458040113', slug: 'server-pro', billing: 'yearly' },
-];
+// The MoonPay pay link -> plan table lives with the credentials, in
+// pip-site/api/admin/payments.js; each transaction arrives already labelled.
 
 // Best-effort field extraction — provider transaction shapes are confirmed to
 // exist but were empty at build time (test mode), so read defensively.
@@ -226,27 +219,33 @@ async function fetchDodo() {
   }
 }
 
+/**
+ * MoonPay payments, read through pip-site rather than from Helio directly.
+ *
+ * This console used to hold its own MOONPAY_PUBLIC_KEY / MOONPAY_SECRET_KEY. On
+ * 2026-07-24 that copy turned out to be stale (pip-site's keys were rotated at
+ * go-live, this project's were not), so every read 401'd while checkout kept
+ * working — and neither copy could be read back to re-sync them, because Vercel
+ * marks them Sensitive and Helio never re-shows a secret. The credentials now
+ * live in exactly one project, and this asks that project.
+ */
 async function fetchMoonpay() {
-  const pub = process.env.MOONPAY_PUBLIC_KEY;
-  const sec = process.env.MOONPAY_SECRET_KEY;
-  if (!pub || !sec) return { ok: false, payments: [] };
-  const h = { Authorization: `Bearer ${sec}`, Origin: 'https://pipinvest.xyz' };
+  const token = process.env.DASHBOARD_TOKEN;
+  if (!token) return { ok: false, payments: [], failures: ['DASHBOARD_TOKEN not set'] };
+  const base = (process.env.PIP_SITE_BASE || 'https://pipinvest.xyz').replace(/\/+$/, '');
   const out = [];
-  const failures = [];
   try {
-    await Promise.all(MOONPAY_PAYLINKS.map(async (pl) => {
-      // `apiKey`, not `publicKey` — the param name the charge API (which is
-      // confirmed working in pip-site/api/checkout/moonpay.js) uses. With the
-      // wrong name every call 401s, and the old silent `return` meant a real
-      // paid transaction simply never appeared in this console.
-      const r = await fetch(`https://api.hel.io/v1/paylink/${pl.id}/transactions?apiKey=${pub}`, { headers: h });
-      if (!r.ok) {
-        failures.push(`${pl.slug}/${pl.billing}: HTTP ${r.status}`);
-        console.error(`[admin] moonpay ${pl.slug}/${pl.billing} transactions: HTTP ${r.status}`);
-        return;
-      }
-      const list = await r.json();
-      for (const t of Array.isArray(list) ? list : (list.items || [])) {
+    const r = await fetch(`${base}/api/admin/payments`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!r.ok) {
+      const msg = `payments proxy HTTP ${r.status}`;
+      console.error(`[admin] moonpay ${msg}`);
+      return { ok: false, payments: [], failures: [msg] };
+    }
+    const data = await r.json();
+    for (const grp of data.results || []) {
+      for (const t of grp.transactions || []) {
         const meta = t.meta || t.paymentRequest || {};
         out.push({
           provider: 'moonpay',
@@ -256,18 +255,17 @@ async function fetchMoonpay() {
           created_at: first(t.createdAt, t.created_at, t.paidAt),
           status: first(t.status, t.paymentStatus, 'success'),
           who: first(t.customerDetails && (t.customerDetails.email || t.customerDetails.discordUsername), t.senderPk),
-          slug: pl.slug, billing: pl.billing,
+          slug: grp.slug, billing: grp.billing,
           raw: t,
         });
       }
-    }));
-    // Every pay link erroring means the credentials/param are wrong, not that
-    // there were no sales — report that as not-ok so the console can say so
-    // rather than rendering a confident, empty revenue table.
-    const allFailed = failures.length === MOONPAY_PAYLINKS.length;
-    return { ok: !allFailed, payments: out, failures };
+    }
+    if (data.failures && data.failures.length) {
+      console.error(`[admin] moonpay upstream failures: ${data.failures.join(' | ')}`);
+    }
+    return { ok: data.ok !== false, payments: out, failures: data.failures || [] };
   } catch (e) {
-    console.error('[admin] moonpay fetch:', e.message);
+    console.error('[admin] moonpay proxy:', e.message);
     return { ok: false, payments: out, failures: [e.message] };
   }
 }

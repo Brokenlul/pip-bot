@@ -26,7 +26,7 @@ function fromBase64(b64) {
 }
 
 // Constant-time string compare (avoids timing side-channels on the signature).
-function safeEqual(a, b) {
+export function safeEqual(a, b) {
   if (a.length !== b.length) return false;
   let diff = 0;
   for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
