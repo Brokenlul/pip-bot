@@ -218,7 +218,10 @@ async function viewPayments() {
   const churned = testers.filter((t) => t.subscription_provider && D.classify(t, now) === 'lapsed');
   // MRR estimate from active paid subs (billing inferred from window length).
   const mrr = paidTesters.reduce((s, t) => s + D.tierPrice(t.tier, D.inferBilling(t)), 0);
-  const rev = (days) => { const cut = now - days * D.DAY; return pay.payments.filter((p) => new Date(p.created_at).getTime() >= cut).reduce((s, p) => s + (Number(p.amount) || 0), 0); };
+  // Refunded transactions stay in the provider's ledger forever — counting them
+  // as revenue made a refunded test sale look like real money.
+  const earned = pay.payments.filter((p) => !p.refunded && p.status !== 'refunded');
+  const rev = (days) => { const cut = now - days * D.DAY; return earned.filter((p) => new Date(p.created_at).getTime() >= cut).reduce((s, p) => s + (Number(p.amount) || 0), 0); };
   const provSplit = { dodo: paidTesters.filter((t) => t.subscription_provider === 'dodo').length, moonpay: paidTesters.filter((t) => t.subscription_provider === 'moonpay').length, loop: paidTesters.filter((t) => t.subscription_provider === 'loop').length };
   const feed = pay.payments.slice(0, 40).map((p) =>
     `<tr><td class="muted">${ago(p.created_at)}</td><td><span class="pill">${esc(p.provider)}</span></td><td>${usd(p.amount)} <span class="muted">${esc(p.currency)}</span></td><td class="mono">${esc(p.who || '—')}</td><td class="muted">${esc(p.status || '')}</td><td class="mono muted" style="font-size:11px">${esc(p.id || '—')}</td></tr>`).join('');

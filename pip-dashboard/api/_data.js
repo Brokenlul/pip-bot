@@ -247,14 +247,48 @@ async function fetchMoonpay() {
     for (const grp of data.results || []) {
       for (const t of grp.transactions || []) {
         const meta = t.meta || t.paymentRequest || {};
+
+        // Helio reports amounts in token MINOR units (USDC/USDT = 6dp), and the
+        // real fields are nested under `meta`, not on the transaction. The old
+        // mapping guessed from top-level fields that don't exist, so the first
+        // real sale rendered as $12,936,000.00. Derive the divisor from the
+        // quote (toAmountMinimal / fromAmountDecimal) so a token with different
+        // decimals can't inflate revenue by a factor of a million; fall back to
+        // 1e6, which is right for every stablecoin these pay links accept.
+        const q = meta.tokenQuote || {};
+        const minorPerUnit = (() => {
+          const m = Number(q.toAmountMinimal);
+          const d = Number(q.fromAmountDecimal);
+          return Number.isFinite(m) && Number.isFinite(d) && d > 0 ? m / d : 1e6;
+        })();
+        const decimal = Number(t.amountUsd); // already-decimal field, if ever present
+        const amount = Number.isFinite(decimal) && decimal > 0
+          ? decimal
+          : num(meta.totalAmountAsUSD, meta.amount, meta.totalAmount, t.amount) / minorPerUnit;
+
+        // Who paid. The checkout bakes identity into customerDetails
+        // .additionalJSON ("discord:<handle>:<plan>:<billing>"); prefer that over
+        // the email, since the handle is what access is actually granted against.
+        const cust = meta.customerDetails || t.customerDetails || {};
+        let extra = {};
+        try { extra = JSON.parse(cust.additionalJSON || '{}'); } catch { /* not JSON */ }
+        const who = extra.handle
+          ? `${extra.platform || 'discord'}:${extra.handle}`
+          : first(cust.email, cust.discordUser, cust.telegramUser, meta.senderPK);
+
+        // A refunded transaction is still in the ledger and must not count as
+        // revenue — the Jul 17 test sale was refunded and was being summed.
+        const refunded = Array.isArray(t.refunds) && t.refunds.length > 0;
+
         out.push({
           provider: 'moonpay',
           id: first(t.id, t._id, t.transactionId), // read defensively; used by PAYMENTS_EXCLUDE_IDS
-          amount: num(t.amountUsd, t.amount, meta.amount) / (t.amount && !t.amountUsd ? 1e6 : 1), // USDC minor units → USD if raw
-          currency: first(t.currency, 'USDC'),
+          amount,
+          currency: first(q.to && q.to.symbol, t.currency, 'USDC'),
           created_at: first(t.createdAt, t.created_at, t.paidAt),
-          status: first(t.status, t.paymentStatus, 'success'),
-          who: first(t.customerDetails && (t.customerDetails.email || t.customerDetails.discordUsername), t.senderPk),
+          status: refunded ? 'refunded' : String(first(meta.transactionStatus, t.status, t.paymentStatus, 'success')).toLowerCase(),
+          refunded,
+          who,
           slug: grp.slug, billing: grp.billing,
           raw: t,
         });
