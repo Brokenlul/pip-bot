@@ -142,7 +142,7 @@ async function readBody(req) {
 }
 
 // ---- small render helpers --------------------------------------------------
-const { esc, usd, usd4, pct, shortId, ago, ymd } = R;
+const { esc, usd, usd4, pct, shortId, ago, ymd, remaining, untilCell } = R;
 const card = (eyebrow, inner) => `<div class="card"><div class="eyebrow">${esc(eyebrow)}</div>${inner}</div>`;
 const stat = (label, value, sub) => `<div class="card stat"><div class="eyebrow">${esc(label)}</div><div class="big">${value}</div>${sub ? `<div class="muted">${sub}</div>` : ''}</div>`;
 const table = (heads, rows) => `<table><thead><tr>${heads.map((h) => `<th>${h}</th>`).join('')}</tr></thead><tbody>${rows || `<tr><td colspan="${heads.length}" class="muted">Nothing yet.</td></tr>`}</tbody></table>`;
@@ -375,17 +375,25 @@ async function peopleView(filter, q) {
   const extendedTesters = testers.filter((t) => t.extension_used);
   const convBase = paidTesters.length + lapsedUnpaidTesters.length;
   const convRate = convBase ? paidTesters.length / convBase : null;
-  const lapsedRows = lapsedUnpaidTesters.map((x) =>
-    `<tr><td class="mono">${esc(x.t.name || x.t.platform_id)}</td><td><span class="pill">${esc(x.t.platform)}</span></td><td class="muted">${ymd(x.t.access_until)}</td><td>${x.t.extension_used ? 'used ext' : 'no ext'}</td></tr>`).join('');
+  const lapsedRows = lapsedUnpaidTesters
+    .sort((a, b) => String(b.t.access_until || '').localeCompare(String(a.t.access_until || '')))
+    .map((x) =>
+      `<tr><td class="mono">${esc(x.t.name || x.t.platform_id)}</td><td><span class="pill">${esc(x.t.platform)}</span></td><td class="mono" style="white-space:nowrap">${untilCell(x.t.access_until, now)}</td><td class="muted">${ymd(x.t.access_until)}</td><td>${x.t.extension_used ? 'used ext' : 'no ext'}</td></tr>`).join('');
+
+  // Who to message today, soonest first — the whole point of the countdown.
+  const expiringRows = expiringSoon
+    .sort((a, b) => new Date(a.t.access_until) - new Date(b.t.access_until))
+    .map((x) =>
+      `<tr><td class="mono"><a class="rowlink" href="/users?id=${encodeURIComponent(x.t.platform_id)}">${esc(x.t.name || x.t.platform_id)}</a></td><td><span class="pill">${esc(x.t.platform)}</span></td><td class="mono" style="white-space:nowrap">${untilCell(x.t.access_until, now)}</td><td class="muted">${ymd(x.t.access_until)}</td><td>${x.t.extension_used ? 'used ext' : 'no ext'}</td></tr>`).join('');
   const extRows = extendedTesters.map((t) =>
     `<tr><td class="mono">${esc(t.name || t.platform_id)}</td><td class="muted">${t.extension_claimed_at ? ago(t.extension_claimed_at) : '—'}</td><td>${t.extension_tweet_url ? `<a class="rowlink" href="${esc(t.extension_tweet_url)}" target="_blank" rel="noopener">tweet ↗</a>` : '<span class="muted">no link</span>'}</td></tr>`).join('');
 
   const bodyRows = rows.map((p) => {
     const id = `${p.platform}:${p.platformId}`;
     const lapsed = p.stage === 'lapsed';
-    const until = p.accessUntil
-      ? (Number.isFinite(new Date(p.accessUntil).getTime()) ? ymd(p.accessUntil) : 'never')
-      : '—';
+    // Countdown over calendar date: this column exists to decide who to message
+    // today. The date is still there on hover.
+    const until = untilCell(p.accessUntil, now);
     return `<tr>
       <td>
         <div><a class="rowlink" href="/users?id=${encodeURIComponent(p.platformId)}"><strong>${esc(p.name || shortId(p.platformId))}</strong></a></div>
@@ -398,7 +406,7 @@ async function peopleView(filter, q) {
       <td class="mono muted">${p.msgsAll}</td>
       <td class="mono muted">${usd4(p.spendAll)}</td>
       <td class="muted">${p.lastActive ? ago(p.lastActive) : '—'}</td>
-      <td class="mono ${lapsed ? 'bad' : ''}">${until}</td>
+      <td class="mono" style="white-space:nowrap">${until}</td>
       <td>${statusSelect(p)}</td>
       <td style="white-space:nowrap">
         ${accessForm(p, 7, '+7d')}
@@ -434,7 +442,8 @@ async function peopleView(filter, q) {
         ['Person', 'Stage', 'Source', 'Msgs 7d', 'Spend 7d', 'Msgs all-time', 'Spend all-time', 'Last active', 'Access until', 'Status', 'Access'],
         bodyRows,
       ))}
-      ${card('Lapsed & unpaid · re-engage or let go', table(['User', 'Platform', 'Ended', 'Extension'], lapsedRows))}
+      ${expiringRows ? card('Expiring ≤48h · outreach list', table(['User', 'Platform', 'Time left', 'Expires', 'Extension'], expiringRows)) : ''}
+      ${card('Lapsed & unpaid · re-engage or let go', table(['User', 'Platform', 'Lapsed', 'Ended', 'Extension'], lapsedRows))}
       ${card('Tweet extensions claimed · verify the links', table(['User', 'Claimed', 'Tweet'], extRows))}
       <div class="card"><p class="muted">
         A <strong>lead</strong> arrived but never sent a message. Source is only known where the
@@ -677,7 +686,13 @@ async function viewUserDetail(id) {
       ${stat('State', t ? state : 'not a tester')}
       ${stat('Spend · 30d', usd(spend))}
       ${stat('Messages · 30d', String(mine.length))}
-      ${stat('Access until', t && ymd(t.access_until), t && t.subscription_provider ? `${t.subscription_provider} · ${(D.TIER[t.tier] || {}).label || t.tier || ''}` : '')}
+      ${stat(
+        'Access left',
+        t ? untilCell(t.access_until, now) : '—',
+        t && t.access_until && Number.isFinite(new Date(t.access_until).getTime())
+          ? `until ${ymd(t.access_until)}${t.subscription_provider ? ` · ${t.subscription_provider} · ${(D.TIER[t.tier] || {}).label || t.tier || ''}` : ''}`
+          : (t && t.subscription_provider ? `${t.subscription_provider} · ${(D.TIER[t.tier] || {}).label || t.tier || ''}` : ''),
+      )}
     </div>`;
   const profileHtml = profiles.length
     ? profiles.map((p) => `<div style="margin-bottom:10px"><div class="muted mono" style="font-size:12px">${esc(String(p.guild_id))} · ${ago(p.updated_at)}</div><div>${esc(p.profile)}</div></div>`).join('')
@@ -758,12 +773,31 @@ async function serversView() {
       : `<span class="bad">▼${Math.round(Math.abs(delta) * 100)}%</span>`;
   };
 
-  const rows = active.map((g) => {
+  // Outreach order, which is NOT simply "ascending time left" — that buries the
+  // servers you can still save under ones that died weeks ago. Live servers
+  // come first soonest-to-expire, then recently-expired (most recent first,
+  // since a win-back gets harder every day), then the ones with no expiry.
+  const outreachRank = (g) => {
+    const { ms } = R.remaining(D.guildAccess(g, now).until, now);
+    if (ms === null) return [3, 0]; // unknown start date
+    if (!Number.isFinite(ms)) return [2, 0]; // never expires
+    return ms > 0 ? [0, ms] : [1, -ms];
+  };
+  const sortedActive = [...active].sort((a, b) => {
+    const [ga, va] = outreachRank(a);
+    const [gb, vb] = outreachRank(b);
+    return ga - gb || va - vb;
+  });
+
+  const rows = sortedActive.map((g) => {
     const capFrac = GUILD_DAILY_CAP ? (spendToday.get(g.id) || 0) / GUILD_DAILY_CAP : 0;
     const label = labelBy.get(g.id);
     const frCount = frustrationBy.get(g.id) || 0;
+    const acc = D.guildAccess(g, now);
     return `<tr>
       <td><strong>${esc(g.name || 'unnamed')}</strong><div class="muted mono" style="font-size:11px">${esc(g.id)}</div></td>
+      <td><span class="tag ${acc.kind === 'paid' ? 'paid' : acc.kind === 'lapsed' ? 'lapsed' : 'trial'}">${esc(acc.plan)}</span>${acc.provider ? `<div class="muted mono" style="font-size:11px">${esc(acc.provider)}</div>` : ''}</td>
+      <td class="mono" style="white-space:nowrap">${untilCell(acc.until, now)}${acc.until && Number.isFinite(new Date(acc.until).getTime()) ? `<div class="muted" style="font-size:11px">${ymd(acc.until)}</div>` : ''}</td>
       <td class="mono">${msgs7.get(g.id) || 0} <span style="font-size:11px">${trend(g.id)}</span></td>
       <td class="mono">${usd4(spend7.get(g.id) || 0)}${capFrac >= 0.8 ? ' <span class="bad" style="font-size:10px">near cap</span>' : ''}</td>
       <td class="mono muted">${msgsAll.get(g.id) || 0}</td>
@@ -783,17 +817,24 @@ async function serversView() {
     </tr>`).join('');
 
   const totalMsgs7 = [...msgs7.values()].reduce((a, b) => a + b, 0);
+  // Still live, but inside the outreach window. Already-lapsed servers are
+  // excluded — they need a different conversation, not a renewal nudge.
+  const expiringServers = sortedActive.filter((g) => {
+    const { ms } = R.remaining(D.guildAccess(g, now).until, now);
+    return ms !== null && Number.isFinite(ms) && ms > 0 && ms < 3 * D.DAY;
+  });
   const body = `
     ${usersSubNav('guilds')}
-    <div class="grid3">
+    <div class="grid4">
       ${stat('Servers now', String(active.length))}
+      ${stat('Expiring ≤72h', String(expiringServers.length), expiringServers.length ? 'reach out' : 'none')}
       ${stat('Messages · 7d', totalMsgs7.toLocaleString())}
       ${stat('Removed (all-time)', String(removed.length))}
     </div>
-    ${card('Servers Pip is in', table(
-      ['Server', 'Msgs 7d', 'Spend 7d', 'Msgs all-time', 'Spend all-time', 'Frustration 7d', 'Label', 'Last active'],
+    ${card('Servers Pip is in · soonest to expire first', table(
+      ['Server', 'Plan', 'Access left', 'Msgs 7d', 'Spend 7d', 'Msgs all-time', 'Spend all-time', 'Frustration 7d', 'Label', 'Last active'],
       rows,
-    ) + `<p class="muted" style="margin-top:8px">Trend compares this week to the week before. "near cap" flags a server that's already used ≥80% of today's ${usd(GUILD_DAILY_CAP)} shared daily spend cap. Frustration mentions are in-server negativity that never @-mentioned Pip — detail on the Errors tab.</p>`)}
+    ) + `<p class="muted" style="margin-top:8px">Access left counts down to the end of a paid window, or to the end of the free ${D.TRIAL_DAYS}-day trial (derived from when Pip first saw the server — there is no trial row for a guild). Red is under 24h, amber under 72h. Trend compares this week to the week before. "near cap" flags a server that's already used ≥80% of today's ${usd(GUILD_DAILY_CAP)} shared daily spend cap. Frustration mentions are in-server negativity that never @-mentioned Pip — detail on the Errors tab.</p>`)}
     ${removed.length ? card('Removed servers', table(['Server', 'Guild ID', 'Installed', 'Removed'], removedRows)) : ''}`;
   return R.shell({ title: 'pip · admin — users · servers', active: 'users', body, updated: new Date() });
 }

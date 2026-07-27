@@ -75,6 +75,44 @@ const ago = (iso) => {
   if (d < 86400) return `${Math.floor(d / 3600)}h ago`;
   return `${Math.floor(d / 86400)}d ago`;
 };
+/**
+ * Time left until an access window closes, as "1d 5h" / "5h 20m" / "12m".
+ *
+ * Built for outreach: a date tells you when someone lapses, a countdown tells
+ * you whether to message them now. Days+hours down to the last day, then
+ * hours+minutes, because the last few hours are the ones worth acting on.
+ *
+ * Returns { text, cls, ms } so callers can colour by urgency, and guards
+ * Postgres 'infinity' (comped/founder rows) — new Date('infinity') is Invalid,
+ * and .toISOString() on it THROWS, which is why ymd() guards it too.
+ */
+const remaining = (iso, now = Date.now()) => {
+  if (!iso) return { text: '—', cls: 'muted', ms: null };
+  const t = new Date(iso).getTime();
+  if (!Number.isFinite(t)) return { text: 'never expires', cls: 'ok', ms: Infinity };
+
+  const ms = t - now;
+  if (ms <= 0) {
+    const d = Math.floor(-ms / 86400000);
+    const h = Math.floor((-ms % 86400000) / 3600000);
+    return { text: d >= 1 ? `expired ${d}d ago` : h >= 1 ? `expired ${h}h ago` : 'expired just now', cls: 'bad', ms };
+  }
+  const days = Math.floor(ms / 86400000);
+  const hours = Math.floor((ms % 86400000) / 3600000);
+  const mins = Math.floor((ms % 3600000) / 60000);
+  const text = days >= 1 ? `${days}d ${hours}h` : hours >= 1 ? `${hours}h ${mins}m` : `${mins}m`;
+  // <24h is the "message them today" band, <72h the "queue them up" band.
+  const cls = ms < 86400000 ? 'bad' : ms < 3 * 86400000 ? 'gold' : '';
+  return { text, cls, ms };
+};
+
+/** Countdown as ready-to-drop HTML, with the exact date on hover. */
+const untilCell = (iso, now) => {
+  const r = remaining(iso, now);
+  const title = iso && Number.isFinite(new Date(iso).getTime()) ? ` title="${esc(String(iso))}"` : '';
+  return `<span class="${r.cls}"${title}>${esc(r.text)}</span>`;
+};
+
 const median = (a) => { if (!a.length) return null; const s = [...a].sort((x, y) => x - y); const m = s.length >> 1; return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2; };
 const p95 = (a) => { if (!a.length) return null; const s = [...a].sort((x, y) => x - y); return s[Math.min(s.length - 1, Math.ceil(0.95 * s.length) - 1)]; };
 
@@ -158,5 +196,5 @@ select.s-revenue{color:var(--green);border-color:var(--green)}
 module.exports = {
   COOKIE_NAME, isAuthed, passwordOk, loginCookieHeader, logoutCookieHeader, dashToken,
   esc, usd, usd4, pct, dayKey, shortId, ago, median, p95,
-  ymd, send, shell, nav, CSS,
+  ymd, remaining, untilCell, send, shell, nav, CSS,
 };

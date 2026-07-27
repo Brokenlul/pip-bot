@@ -107,7 +107,45 @@ async function setAccess(platform, platformId, days) {
 }
 
 async function loadGuilds() {
-  return sb('guilds?select=id,name,created_at,installed_at,removed_at,greeted_at&limit=2000');
+  return sb('guilds?select=id,name,created_at,installed_at,removed_at,greeted_at,server_tier,server_access_until,server_subscription_provider&limit=2000');
+}
+
+/** Server plans are per-guild, so a trial has to be derived, not read. */
+const TRIAL_DAYS = 7;
+
+/**
+ * A guild's access window — MIRRORS guildAccess() in src/beta/guardrails.ts.
+ * Keep the two in step: if this disagrees with the bot, the console will show
+ * a server as live while Pip is refusing it (or the reverse), which is worse
+ * than showing nothing.
+ *
+ * Paid wins when server_access_until is in the future AND the tier is a real
+ * server tier. Otherwise the guild is on its free trial, derived from
+ * created_at + 7d — there is no trial row to read. An unknown created_at fails
+ * OPEN in the bot, so it's reported as unknown here rather than as expired.
+ */
+function guildAccess(g, now = Date.now()) {
+  const paidUntil = g.server_access_until ? new Date(g.server_access_until).getTime() : 0;
+  const tier = g.server_tier || '';
+  if (Number.isFinite(paidUntil) && paidUntil > now && (tier === 'server-pro' || tier === 'elite')) {
+    return {
+      kind: 'paid',
+      plan: (TIER[tier] || {}).label || tier,
+      until: g.server_access_until,
+      provider: g.server_subscription_provider || null,
+    };
+  }
+  const created = g.created_at ? new Date(g.created_at).getTime() : null;
+  if (created == null || !Number.isFinite(created)) {
+    return { kind: 'unknown', plan: 'trial (start unknown)', until: null, provider: null };
+  }
+  const until = new Date(created + TRIAL_DAYS * DAY).toISOString();
+  return {
+    kind: until > new Date(now).toISOString() ? 'trial' : 'lapsed',
+    plan: 'server trial',
+    until,
+    provider: null,
+  };
 }
 async function loadGuildLabels() {
   return sb('guild_labels?select=guild_id,labels,note,updated_at&limit=5000');
@@ -467,5 +505,5 @@ module.exports = {
   sb, loadUsage, loadTesters, loadFeedback, loadSafetyEvents, loadSiteEvents, loadGuilds, loadActivity, loadUserConversations, loadUserProfile,
   loadGuildLabels, saveGuildLabel, loadHeartbeat, loadSentimentEvents, loadConversationsByMessageIds,
   loadAttribution, loadLabels, saveLabels, setAccess,
-  loadPayments, classify, tierPrice, inferBilling, overviewMetrics, TIER, DAY,
+  loadPayments, classify, tierPrice, inferBilling, overviewMetrics, guildAccess, TIER, DAY, TRIAL_DAYS,
 };
