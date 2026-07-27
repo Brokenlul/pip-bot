@@ -7,7 +7,7 @@
 //
 // Set MOONPAY_WEBHOOK_TOKEN and/or MOONPAY_WEBHOOK_SECRET (plus SUPABASE_URL +
 // SUPABASE_SECRET_KEY) in the Vercel pip-site project env.
-import { verifyMoonpayWebhook, grantAccess, accessUntilFor } from '../_lib.js';
+import { verifyMoonpayWebhook, applyGrant } from '../_lib.js';
 
 export const config = { runtime: 'edge' };
 
@@ -84,17 +84,21 @@ export default async function handler(req) {
     tx.subscriptionId || tx.subscription_id || tx.id || tx.transactionId || null;
 
   try {
-    const platformId = await grantAccess({
+    const { platformId, guildId, guildUnmapped } = await applyGrant({
       platform,
       handle,
-      name: handle,
-      accessUntil: accessUntilFor(billing),
-      tier: plan || null,
+      plan: plan || null,
+      billing,
       provider: 'moonpay',
       subscriptionId: subId,
-      status: 'active',
+      guildId: meta.guildId || meta.guild_id,
     });
-    console.log(`[moonpay] ${type}: granted ${platform} ${platformId} (${plan}/${billing})`);
+    if (guildUnmapped) {
+      // Paid for a server plan, but nothing says which server. Only a human can
+      // resolve it, so retrying is pointless — make it loud instead of silent.
+      console.error(`[moonpay] ${type}: server plan ${plan} for ${platform} ${platformId} has NO guild id — server not unlocked, set guilds.server_tier by hand`);
+    }
+    console.log(`[moonpay] ${type}: granted ${platform} ${platformId} (${plan}/${billing})${guildId ? ` guild ${guildId}` : ''}`);
     return Response.json({ ok: true });
   } catch (e) {
     console.error(`[moonpay] grant failed: ${e.message}`);

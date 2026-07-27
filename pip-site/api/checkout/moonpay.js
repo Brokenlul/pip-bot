@@ -7,6 +7,8 @@
 //
 // Needs MOONPAY_PUBLIC_KEY + MOONPAY_SECRET_KEY in the Vercel pip-site env.
 
+import { isServerPlan, guildKeyFor } from '../_lib.js';
+
 export const config = { runtime: 'edge' };
 
 // slug + billing -> MoonPay Commerce pay link id. FILL THESE IN with the pay
@@ -32,6 +34,15 @@ export default async function handler(req) {
   const handle = String(body.handle || '').trim().replace(/^@+/, '');
   if (handle.length < 2) return Response.json({ error: 'missing handle' }, { status: 400 });
 
+  // Server plans unlock a GUILD, so the guild id is part of what's being bought
+  // and is required here. Validating before the charge is created means a typo
+  // costs the buyer a retry instead of a paid-but-locked server.
+  let guildId = null;
+  if (isServerPlan(slug)) {
+    guildId = guildKeyFor(platform, body.guildId);
+    if (!guildId) return Response.json({ error: 'missing or malformed server id' }, { status: 400 });
+  }
+
   const paylinkId = PAYLINKS[slug] && PAYLINKS[slug][billing];
   if (!paylinkId) return Response.json({ error: 'unavailable' }, { status: 503 });
 
@@ -44,9 +55,14 @@ export default async function handler(req) {
   // echoes back in the webhook (our webhook parses it into meta). `ref` mirrors
   // the Loop colon-packed format the webhook already understands; the discrete
   // fields are there for readability / a belt-and-suspenders parse.
+  //
+  // guildId stays OUT of `ref`: the webhook destructures that string into four
+  // fields, and a Telegram guild key is itself `tg:<id>` — packing it would put
+  // a colon inside a colon-delimited field.
   const meta = {
     ref: `${platform}:${handle}:${slug}:${billing}`,
     platform, handle, plan: slug, billing,
+    ...(guildId ? { guildId } : {}),
   };
 
   let res;

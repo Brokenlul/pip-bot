@@ -581,12 +581,18 @@
       <label style="display: flex; flex-direction: column; gap: 6px; font-size: 13px; color: var(--muted);"><span id="co-handle-label">Your Discord username</span>
         <input type="text" id="co-handle" placeholder="e.g. broken" class="checkout-input mono" autocomplete="off">
       </label>
+      <!-- Server plans unlock a whole server, so we have to be told WHICH one.
+           Shown only for server-* plans. -->
+      <label id="co-guild-wrap" class="hidden" style="display: flex; flex-direction: column; gap: 6px; font-size: 13px; color: var(--muted);"><span id="co-guild-label">Your Discord server ID</span>
+        <input type="text" id="co-guild" placeholder="e.g. 1053808073157906542" class="checkout-input mono" autocomplete="off">
+        <span id="co-guild-hint" style="font-size: 11.5px; line-height: 1.5;"></span>
+      </label>
       <p id="co-error" class="hidden" style="margin: -8px 0 0; font-size: 12px; color: var(--clay);"></p>
       <div style="display: flex; flex-direction: column; gap: 10px;">
         <button type="button" id="checkout-card" class="checkout-submit">Pay with card →</button>
         <button type="button" id="checkout-usdc" class="checkout-alt">Pay with crypto (USDC & more) →</button>
       </div>
-      <p style="margin: 0; text-align: center; font-size: 12px; color: var(--muted); line-height: 1.5;">Access unlocks on your <span id="co-plat-word">Discord</span> account automatically after payment. 7-day free trial, cancel anytime.</p>
+      <p id="co-foot" style="margin: 0; text-align: center; font-size: 12px; color: var(--muted); line-height: 1.5;"></p>
     </div>
   </div>
 
@@ -724,7 +730,23 @@
       }
     };
 
-    function checkoutUrl(provider, slug, billing, platform, handle) {
+    // Server plans unlock a GUILD, not the buyer, so the server id is part of
+    // what's being bought and travels with every provider's metadata. Mirrors
+    // isServerPlan / guildKeyFor in api/_lib.js — keep the two in step.
+    function isServerPlan(slug) { return typeof slug === 'string' && slug.indexOf('server-') === 0; }
+    function guildKey(platform, raw) {
+      var s = String(raw || '').trim();
+      if (!s) return null;
+      if (platform === 'telegram') {
+        // Telegram chats are namespaced `tg:<chatId>` so their ids can't
+        // collide with Discord snowflakes. Group ids are negative.
+        var id = s.replace(/^tg:/i, '');
+        return /^-?\d{5,20}$/.test(id) ? 'tg:' + id : null;
+      }
+      return /^\d{17,20}$/.test(s) ? s : null;
+    }
+
+    function checkoutUrl(provider, slug, billing, platform, handle, guild) {
       var plan = CHECKOUT[slug];
       var base = plan && plan[provider] && plan[provider][billing];
       if (!base) return '';
@@ -735,10 +757,13 @@
         var ret = encodeURIComponent('https://pipinvest.xyz/welcome?platform=' + platform + '&plan=' + slug);
         return base + sep + 'metadata_platform=' + platform + '&metadata_handle=' + h +
           '&metadata_plan=' + encodeURIComponent(slug) + '&metadata_billing=' + billing +
+          (guild ? '&metadata_guild_id=' + encodeURIComponent(guild) : '') +
           '&redirect_url=' + ret;
       }
       // Loop: carry everything in the reference id so it returns in the webhook.
-      return base + sep + 'ref-id=' + encodeURIComponent(platform + ':' + handle + ':' + slug + ':' + billing);
+      // The guild id goes last because a Telegram key contains a colon itself.
+      return base + sep + 'ref-id=' + encodeURIComponent(
+        platform + ':' + handle + ':' + slug + ':' + billing + (guild ? ':' + guild : ''));
     }
 
     var personalPlans = [
@@ -844,7 +869,19 @@
       document.getElementById('co-plat-telegram').classList.toggle('active', !isD);
       document.getElementById('co-handle-label').textContent = isD ? 'Your Discord username' : 'Your Telegram @handle';
       document.getElementById('co-handle').placeholder = isD ? 'e.g. broken' : 'e.g. @broken';
-      document.getElementById('co-plat-word').textContent = isD ? 'Discord' : 'Telegram';
+      // A server plan unlocks the server for everyone in it, not the buyer's own
+      // account — say which, so nobody buys the wrong one.
+      var word = isD ? 'Discord' : 'Telegram';
+      var forServer = Boolean(state.checkoutPlan && isServerPlan(state.checkoutPlan.slug));
+      document.getElementById('co-foot').textContent = (forServer
+        ? 'Pip unlocks for everyone in that ' + (isD ? 'server' : 'group') + ' automatically after payment.'
+        : 'Access unlocks on your ' + word + ' account automatically after payment.'
+      ) + ' 7-day free trial, cancel anytime.';
+      document.getElementById('co-guild-label').textContent = isD ? 'Your Discord server ID' : 'Your Telegram group ID';
+      document.getElementById('co-guild').placeholder = isD ? 'e.g. 1053808073157906542' : 'e.g. -1001234567890';
+      document.getElementById('co-guild-hint').textContent = isD
+        ? 'Discord → Settings → Advanced → turn on Developer Mode, then right-click your server → Copy Server ID.'
+        : 'Open the group in Telegram Web — the chat id is the number in the address bar, starting with -100.';
     }
     function showError(m) { var e = document.getElementById('co-error'); e.textContent = m; e.classList.remove('hidden'); }
     function hideError() { document.getElementById('co-error').classList.add('hidden'); }
@@ -857,6 +894,8 @@
         '<span style="font-size:14px; color: var(--muted); font-weight:400;"> ' + esc(plan.priceSuffix) + '</span>';
       document.getElementById('checkout-billing-line').textContent = plan.billingLine;
       document.getElementById('co-handle').value = '';
+      document.getElementById('co-guild').value = '';
+      document.getElementById('co-guild-wrap').classList.toggle('hidden', !isServerPlan(plan.slug));
       hideError();
       setPlatform(state.platform);
       document.getElementById('checkout-overlay').classList.remove('hidden');
@@ -908,15 +947,33 @@
     function normalizeHandle(raw, platform) {
       return raw.trim().replace(/^@+/, '');
     }
-    function goPay(provider) {
-      var plan = state.checkoutPlan;
-      if (!plan) return;
+    // Everything both pay buttons need, or null with the error already shown.
+    function checkoutFields() {
       var handle = normalizeHandle(document.getElementById('co-handle').value, state.platform);
       if (handle.length < 2) {
         showError('Enter your ' + (state.platform === 'discord' ? 'Discord username' : 'Telegram handle') + ' so Pip can unlock your access.');
-        return;
+        return null;
       }
-      var url = checkoutUrl(provider, plan.slug, plan.billing, state.platform, handle);
+      var guild = null;
+      if (isServerPlan(state.checkoutPlan.slug)) {
+        guild = guildKey(state.platform, document.getElementById('co-guild').value);
+        if (!guild) {
+          showError(state.platform === 'discord'
+            ? 'Enter your server ID (a long number) so Pip can unlock that server. Turn on Developer Mode in Discord, then right-click the server → Copy Server ID.'
+            : 'Enter your group ID (a number starting with -100) so Pip can unlock that group.');
+          return null;
+        }
+      }
+      hideError();
+      return { handle: handle, guild: guild };
+    }
+
+    function goPay(provider) {
+      var plan = state.checkoutPlan;
+      if (!plan) return;
+      var f = checkoutFields();
+      if (!f) return;
+      var url = checkoutUrl(provider, plan.slug, plan.billing, state.platform, f.handle, f.guild);
       if (!url) {
         showError(provider === 'dodo'
           ? 'Card checkout isn’t live yet, try crypto, or check back shortly.'
@@ -932,20 +989,16 @@
     async function goPayMoonpay() {
       var plan = state.checkoutPlan;
       if (!plan) return;
-      var handle = normalizeHandle(document.getElementById('co-handle').value, state.platform);
-      if (handle.length < 2) {
-        showError('Enter your ' + (state.platform === 'discord' ? 'Discord username' : 'Telegram handle') + ' so Pip can unlock your access.');
-        return;
-      }
+      var f = checkoutFields();
+      if (!f) return;
       var btn = document.getElementById('checkout-usdc');
       var prev = btn.textContent;
       btn.disabled = true; btn.textContent = 'Preparing checkout…';
-      hideError();
       try {
         var resp = await fetch('/api/checkout/moonpay', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ slug: plan.slug, billing: plan.billing, platform: state.platform, handle: handle })
+          body: JSON.stringify({ slug: plan.slug, billing: plan.billing, platform: state.platform, handle: f.handle, guildId: f.guild })
         });
         var data = await resp.json().catch(function () { return {}; });
         if (resp.ok && data.url) { openPayFrame(data.url); return; }

@@ -820,16 +820,14 @@ export async function betaGate(msg: NormalizedMessage): Promise<GateDecision> {
       if (!access.ok) {
         return serverBlock(userKey, now, `Pip's free trial in that server is up 🌱 To keep Pip there, an admin can ${payLine()}`);
       }
-      // Per-user ceiling within the server: one member can't drain the shared
-      // guild allowance (and it bounds spam in a free/comped community).
-      const myGuildToday = mine.filter((r) => r.guild_id === msg.guildId).length;
-      if (myGuildToday >= CAPS.perGuildUser.dailyMsgs) {
-        return serverBlock(
-          userKey,
-          now,
-          "You've hit your daily Pip limit in that server 🌱 It resets at midnight UTC. Want your own plan? DM me and I'll sort it.",
-        );
-      }
+      // No per-member sub-cap (removed 2026-07-27). It bought no cost
+      // protection — the guild's own daily + total caps already bound the
+      // worst case — and at 8/day it was the constraint that actually bit
+      // first: SaveTheWhal3s' most engaged member sent 12 on install day, so
+      // Pip would have gone silent on the keenest user in a server that was
+      // mid-evaluation. Silence reads as "the bot is broken", which is what
+      // killed that server. One member CAN now use the guild's whole daily
+      // allowance; that is the accepted trade.
       const guildToday = rows.filter((r) => r.guild_id === msg.guildId).length;
       const block = await planBlock(access.plan, { guild_id: msg.guildId }, guildToday, true);
       if (block) return serverBlock(userKey, now, block);

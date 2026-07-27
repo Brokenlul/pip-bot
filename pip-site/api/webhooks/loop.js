@@ -2,7 +2,7 @@
 // Verifies the loop-signature HMAC, then unlocks the buyer's pip access. The
 // handle/plan/billing travel in the ref-id we set on the checkout link
 // (`platform:handle:slug:billing`). Set LOOP_WEBHOOK_SECRET in the Vercel env.
-import { verifyLoopWebhook, grantAccess, accessUntilFor } from '../_lib.js';
+import { verifyLoopWebhook, applyGrant } from '../_lib.js';
 
 export const config = { runtime: 'edge' };
 
@@ -42,7 +42,10 @@ export default async function handler(req) {
     return Response.json({ ok: true, unmapped: true });
   }
 
-  const [platformRaw, handle, plan, billingRaw] = ref.split(':');
+  // `platform:handle:plan:billing[:guildId]` — the guild id is appended for
+  // server plans only. A Telegram guild key is itself `tg:<id>`, so take the
+  // REST of the string rather than a fifth field.
+  const [platformRaw, handle, plan, billingRaw, ...guildParts] = ref.split(':');
   const platform = platformRaw === 'telegram' ? 'telegram' : 'discord';
   const billing = billingRaw === 'yearly' ? 'yearly' : 'monthly';
   if (!handle) return Response.json({ ok: true, unmapped: true });
@@ -51,17 +54,21 @@ export default async function handler(req) {
   const subId = d.subscriptionId || d.subscription_id || d.payinId || d.id || null;
 
   try {
-    const platformId = await grantAccess({
+    const { platformId, guildId, guildUnmapped } = await applyGrant({
       platform,
       handle,
-      name: handle,
-      accessUntil: accessUntilFor(billing),
-      tier: plan || null,
+      plan: plan || null,
+      billing,
       provider: 'loop',
       subscriptionId: subId,
-      status: 'active',
+      guildId: guildParts.join(':') || null,
     });
-    console.log(`[loop] ${type}: granted ${platform} ${platformId} (${plan}/${billing})`);
+    if (guildUnmapped) {
+      // Paid for a server plan, but nothing says which server. Only a human can
+      // resolve it, so retrying is pointless — make it loud instead of silent.
+      console.error(`[loop] ${type}: server plan ${plan} for ${platform} ${platformId} has NO guild id — server not unlocked, set guilds.server_tier by hand`);
+    }
+    console.log(`[loop] ${type}: granted ${platform} ${platformId} (${plan}/${billing})${guildId ? ` guild ${guildId}` : ''}`);
     return Response.json({ ok: true });
   } catch (e) {
     console.error(`[loop] grant failed: ${e.message}`);

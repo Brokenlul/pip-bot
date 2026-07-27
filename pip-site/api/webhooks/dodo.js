@@ -2,7 +2,7 @@
 // Verifies the Standard Webhooks signature, then unlocks the buyer's pip access
 // by upserting a handle-keyed beta_testers row (claimed to the numeric id when
 // they next message pip). Set DODO_WEBHOOK_SECRET in the Vercel project env.
-import { verifyStandardWebhook, grantAccess, accessUntilFor } from '../_lib.js';
+import { verifyStandardWebhook, applyGrant } from '../_lib.js';
 
 export const config = { runtime: 'edge' };
 
@@ -42,17 +42,21 @@ export default async function handler(req) {
   const subId = data.subscription_id || data.data?.subscription_id || data.payment_id || null;
 
   try {
-    const platformId = await grantAccess({
+    const { platformId, guildId, guildUnmapped } = await applyGrant({
       platform,
       handle,
-      name: handle,
-      accessUntil: accessUntilFor(billing),
-      tier: meta.plan || null,
+      plan: meta.plan || null,
+      billing,
       provider: 'dodo',
       subscriptionId: subId,
-      status: 'active',
+      guildId: meta.guild_id || meta.guildId,
     });
-    console.log(`[dodo] ${type}: granted ${platform} ${platformId} (${meta.plan}/${billing})`);
+    if (guildUnmapped) {
+      // Paid for a server plan, but nothing says which server. Only a human can
+      // resolve it, so retrying is pointless — make it loud instead of silent.
+      console.error(`[dodo] ${type}: server plan ${meta.plan} for ${platform} ${platformId} has NO guild id — server not unlocked, set guilds.server_tier by hand`);
+    }
+    console.log(`[dodo] ${type}: granted ${platform} ${platformId} (${meta.plan}/${billing})${guildId ? ` guild ${guildId}` : ''}`);
     return Response.json({ ok: true });
   } catch (e) {
     console.error(`[dodo] grant failed: ${e.message}`);

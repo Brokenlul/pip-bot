@@ -11,12 +11,10 @@ export const CAPS = {
     cooldownMs: 20_000, // kills spam bursts & double-fires
     maxQuestionLen: 500, // bounds input tokens
   },
-  // Per-user ceiling WITHIN a server (2026-07-24). Server plans are a shared
-  // guild allowance; this stops one member draining it (and bounds spam in a
-  // free/comped community). Applies on top of the guild's plan cap.
-  perGuildUser: {
-    dailyMsgs: 8,
-  },
+  // No per-member ceiling within a server. One existed briefly (8/day,
+  // 2026-07-24 to 2026-07-27) but it bounded nothing the guild's own daily and
+  // total caps didn't already bound, while being the limit that bit first on
+  // real usage. See the note in guardrails.ts betaGate.
   // One-time tweet-for-a-week trial extension. extensionDays should match the
   // initial trial length baked into db/migrations/0006_trial.sql.
   trial: { extensionDays: 7 },

@@ -169,6 +169,115 @@ function env(name) {
   return v;
 }
 
+// ---- server plans -----------------------------------------------------------
+
+/** Plan slugs whose access belongs to a GUILD rather than to the buyer. */
+export function isServerPlan(slug) {
+  return typeof slug === 'string' && slug.startsWith('server-');
+}
+
+/**
+ * Normalize a server id the buyer typed into the key the bot stores guilds
+ * under: a bare snowflake on Discord, `tg:<chatId>` on Telegram — that prefix is
+ * how the adapters namespace Telegram chats so their ids can't collide with
+ * Discord snowflakes (src/adapters/telegram.ts). Returns null when the input
+ * isn't a plausible id, so a typo fails at checkout rather than after payment.
+ */
+export function guildKeyFor(platform, raw) {
+  const s = String(raw || '').trim();
+  if (!s) return null;
+  if (platform === 'telegram') {
+    const id = s.replace(/^tg:/i, '');
+    return /^-?\d{5,20}$/.test(id) ? `tg:${id}` : null;
+  }
+  return /^\d{17,20}$/.test(s) ? s : null;
+}
+
+/**
+ * Attach a paid server plan to the guild it was bought for.
+ *
+ * Server plans are enforced per-GUILD — guardrails.ts `guildAccess` reads
+ * guilds.server_tier + server_access_until — so a Server Pro purchase that only
+ * touched the buyer's beta_testers row unlocked nothing for the server. That was
+ * the state until checkout started collecting a server id (2026-07-27); every
+ * server plan had to be applied by hand in SQL.
+ *
+ * `created_at` and `name` are deliberately NOT sent. On an existing guild an
+ * upsert including created_at would reset the first-seen date the free-trial
+ * window is derived from, and a null name would wipe a name the bot recorded.
+ */
+export async function grantGuildAccess(grant) {
+  const SUPABASE_URL = env('SUPABASE_URL');
+  const KEY = process.env.SUPABASE_SECRET_KEY || env('SUPABASE_SERVICE_ROLE_KEY');
+
+  const row = {
+    id: grant.guildId,
+    server_tier: grant.tier,
+    server_access_until: grant.accessUntil,
+    server_subscription_id: grant.subscriptionId || null,
+    server_subscription_provider: grant.provider || null,
+  };
+
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/guilds?on_conflict=id`, {
+    method: 'POST',
+    headers: {
+      apikey: KEY,
+      Authorization: `Bearer ${KEY}`,
+      'Content-Type': 'application/json',
+      Prefer: 'resolution=merge-duplicates,return=minimal',
+      'User-Agent': 'pip-webhook/1.0', // Supabase secret key is UA-gated
+    },
+    body: JSON.stringify(row),
+  });
+  if (!res.ok) {
+    const body = await res.text().catch(() => '');
+    throw new Error(`supabase guild upsert ${res.status}: ${body}`);
+  }
+  return grant.guildId;
+}
+
+/**
+ * Apply a paid grant, whichever provider it came from.
+ *
+ * Personal plans unlock the buyer. Server plans unlock the GUILD and ALSO write
+ * the buyer's row, because that row is what the admin console reads for active
+ * subs and MRR — dropping it would make a real sale invisible. It does not hand
+ * the buyer a personal plan: `personalPlan()` in guardrails.ts only honours
+ * personal-* / elite tiers, so a server-pro tier falls through to trial caps in
+ * DMs.
+ *
+ * A server plan with no guild id still grants the buyer's row (never lose a
+ * sale) but cannot unlock the server; it returns unmapped so the caller can log
+ * it loudly, since only a human can fix it.
+ */
+export async function applyGrant(grant) {
+  const accessUntil = accessUntilFor(grant.billing);
+  const platformId = await grantAccess({
+    platform: grant.platform,
+    handle: grant.handle,
+    name: grant.handle,
+    accessUntil,
+    tier: grant.plan || null,
+    provider: grant.provider,
+    subscriptionId: grant.subscriptionId,
+    status: 'active',
+  });
+
+  if (!isServerPlan(grant.plan)) return { platformId, guildId: null };
+
+  const guildId = guildKeyFor(grant.platform, grant.guildId);
+  if (!guildId) return { platformId, guildId: null, guildUnmapped: true };
+
+  await grantGuildAccess({
+    guildId,
+    tier: grant.plan,
+    accessUntil,
+    subscriptionId: grant.subscriptionId,
+    provider: grant.provider,
+  });
+  return { platformId, guildId };
+}
+
 /**
  * Upsert a beta_testers row keyed by the buyer's handle (`@handle`), mirroring
  * the existing pending-invite pattern. The bot rekeys it to the numeric id the

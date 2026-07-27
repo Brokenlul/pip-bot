@@ -10,6 +10,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test:site": "node pip-site/test/verify-moonpay.test.mjs && node pip-site/test/guild-grant.test.mjs && node pip-site/test/checkout-guild.test.mjs",
     "start": "node dist/index.js",
     "dev": "tsx watch src/index.ts",
     "register-commands": "tsx src/scripts/register-commands.ts",
