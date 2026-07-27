@@ -183,18 +183,28 @@ function first(...v) { for (const x of v) if (x != null && x !== '') return x; r
 
 async function fetchDodo() {
   const key = process.env.DODO_API_KEY;
-  if (!key) return { ok: false, payments: [], subs: [] };
+  if (!key) return { ok: false, payments: [], subs: [], failures: ['DODO_API_KEY not set'] };
   // Live by default; set DODO_API_BASE=https://test.dodopayments.com to read test
   // mode. The key must match the mode — a test key 401s against the live host.
   const base = process.env.DODO_API_BASE || 'https://live.dodopayments.com';
   const h = { Authorization: `Bearer ${key}` };
+  const failures = [];
   try {
     const [pRes, sRes] = await Promise.all([
       fetch(`${base}/payments?page_size=100`, { headers: h }),
       fetch(`${base}/subscriptions?page_size=100`, { headers: h }),
     ]);
-    const p = pRes.ok ? await pRes.json() : { items: [] };
-    const s = sRes.ok ? await sRes.json() : { items: [] };
+    // A non-ok response used to collapse into an empty list while this function
+    // still returned ok:true, so a 401 rendered a confident $0 revenue table
+    // with no banner. That is exactly what hid the MoonPay outage for a week
+    // (2026-07-24) — a payment read that fails must say so, loudly.
+    const read = async (res, what) => {
+      if (res.ok) return res.json();
+      failures.push(`${what} HTTP ${res.status}`);
+      return { items: [] };
+    };
+    const p = await read(pRes, 'payments');
+    const s = await read(sRes, 'subscriptions');
     const payments = (p.items || []).map((t) => ({
       provider: 'dodo',
       id: first(t.payment_id, t.id, t.reference_id), // read defensively; used by PAYMENTS_EXCLUDE_IDS
@@ -212,10 +222,11 @@ async function fetchDodo() {
       product: first(t.product_id),
       created_at: first(t.created_at),
     }));
-    return { ok: true, payments, subs };
+    if (failures.length) console.error(`[admin] dodo: ${failures.join(' | ')}`);
+    return { ok: failures.length === 0, payments, subs, failures };
   } catch (e) {
     console.error('[admin] dodo fetch:', e.message);
-    return { ok: false, payments: [], subs: [] };
+    return { ok: false, payments: [], subs: [], failures: [e.message] };
   }
 }
 
@@ -316,15 +327,40 @@ function excludedPaymentIds() {
   return new Set((process.env.PAYMENTS_EXCLUDE_IDS || '').split(',').map((s) => s.trim()).filter(Boolean));
 }
 
+/**
+ * Payers to hide entirely, comma-separated in PAYMENTS_EXCLUDE_WHO — values as
+ * they appear in the Who column, e.g. "discord:brokenlul". Case-insensitive.
+ *
+ * Same reasoning as excludedPaymentIds one level up: our own test purchases are
+ * not customer revenue. Excluding the payer rather than the id is what makes it
+ * stick — a handle is stable, whereas the id of the NEXT test purchase is not,
+ * so an id-only rule silently lets the second one back into the customer feed.
+ * There is no way to derive this from the data: the founder's beta_testers row
+ * is named "founder", while checkout records whatever handle was typed into it.
+ */
+function excludedPayers() {
+  return new Set((process.env.PAYMENTS_EXCLUDE_WHO || '').split(',').map((s) => s.trim().toLowerCase()).filter(Boolean));
+}
+
 async function loadPayments() {
   if (_payCache.data && Date.now() - _payCache.at < PROVIDER_TTL) return _payCache.data;
   const [dodo, moon] = await Promise.all([fetchDodo(), fetchMoonpay()]);
   const excluded = excludedPaymentIds();
+  const excludedWho = excludedPayers();
   const payments = [...dodo.payments, ...moon.payments]
     .filter((p) => p.created_at)
     .filter((p) => !p.id || !excluded.has(String(p.id)))
+    .filter((p) => !p.who || !excludedWho.has(String(p.who).toLowerCase()))
     .sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
-  const data = { payments, dodoSubs: dodo.subs || [], ok: dodo.ok || moon.ok, dodoOk: dodo.ok, moonOk: moon.ok };
+  const data = {
+    payments,
+    dodoSubs: dodo.subs || [],
+    ok: dodo.ok || moon.ok,
+    dodoOk: dodo.ok,
+    moonOk: moon.ok,
+    dodoFailures: dodo.failures || [],
+    moonFailures: moon.failures || [],
+  };
   _payCache = { at: Date.now(), data };
   return data;
 }

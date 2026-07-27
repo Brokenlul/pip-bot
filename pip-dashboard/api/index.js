@@ -227,7 +227,17 @@ async function viewPayments() {
     `<tr><td class="muted">${ago(p.created_at)}</td><td><span class="pill">${esc(p.provider)}</span></td><td>${usd(p.amount)} <span class="muted">${esc(p.currency)}</span></td><td class="mono">${esc(p.who || '—')}</td><td class="muted">${esc(p.status || '')}</td><td class="mono muted" style="font-size:11px">${esc(p.id || '—')}</td></tr>`).join('');
   const subRows = paidTesters.map((t) =>
     `<tr><td class="mono">${esc(t.name || t.platform_id)}</td><td><span class="pill">${esc(t.subscription_provider || '?')}</span></td><td>${esc((D.TIER[t.tier] || {}).label || t.tier || '—')}</td><td>${esc(D.inferBilling(t))}</td><td class="muted">${ymd(t.access_until)}</td></tr>`).join('');
-  const providersDown = (!pay.dodoOk || !pay.moonOk) ? `<p class="muted" style="margin:0 0 10px;font-size:12.5px">${pay.dodoOk ? '' : 'Dodo API unreachable. '}${pay.moonOk ? '' : 'MoonPay API unreachable.'} Showing what's available.</p>` : '';
+  // Name the reason, not just the fact. A provider read that fails silently is
+  // indistinguishable from a provider with no sales, which is how a week of
+  // MoonPay 401s read as $0 revenue (2026-07-24).
+  const why = (fails) => (fails && fails.length ? ` (${fails.join('; ')})` : '');
+  const down = [
+    pay.dodoOk ? null : `Dodo API unreachable${why(pay.dodoFailures)}`,
+    pay.moonOk ? null : `MoonPay API unreachable${why(pay.moonFailures)}`,
+  ].filter(Boolean);
+  const providersDown = down.length
+    ? `<p class="bad" style="margin:0 0 10px;font-size:12.5px">${esc(down.join('. '))}. Revenue below is understated — this is not a $0 day.</p>`
+    : '';
   const body = `
     ${providersDown}
     <div class="grid4">
@@ -242,7 +252,7 @@ async function viewPayments() {
       ${stat('By provider', `${provSplit.moonpay} <span class="muted">moonpay</span> · ${provSplit.dodo} <span class="muted">dodo</span>${provSplit.loop ? ` · ${provSplit.loop} loop` : ''}`)}
     </div>
     ${card('Recent payments · live from Dodo + MoonPay', table(['When', 'Provider', 'Amount', 'Who', 'Status', 'Payment id'], feed)
-      + `<p class="muted" style="margin-top:8px">Test transactions live in the provider's ledger and are not deleted from it. To hide one here, add its payment id to <code>PAYMENTS_EXCLUDE_IDS</code> (comma-separated) in the Vercel env.</p>`)}
+      + `<p class="muted" style="margin-top:8px">Test transactions live in the provider's ledger and are not deleted from it. To hide one here, add its payment id to <code>PAYMENTS_EXCLUDE_IDS</code>, or hide every purchase by one payer with <code>PAYMENTS_EXCLUDE_WHO</code> (matches the Who column, e.g. <code>discord:handle</code>) — both comma-separated, in the Vercel env.</p>`)}
     ${card('Active subscriptions', table(['User', 'Provider', 'Plan', 'Billing', 'Renews'], subRows))}`;
   return R.shell({ title: 'pip · admin — payments', active: 'payments', body, updated: new Date() });
 }
