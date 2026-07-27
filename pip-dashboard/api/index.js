@@ -83,6 +83,35 @@ module.exports = async function handler(req, res) {
     return res.end();
   }
 
+  // ---- Referral payout: record that money was sent.
+  // This does NOT decide an amount or create an obligation — the bot already
+  // computed both and wrote the row. All this does is stamp paid_at and the
+  // transaction reference, so the queue stops showing it.
+  if (path === '/referral-paid') {
+    if ((req.method || 'GET').toUpperCase() !== 'POST') {
+      res.statusCode = 405;
+      return res.end('method not allowed');
+    }
+    const form = new URLSearchParams(await readBody(req));
+    const id = form.get('id') || '';
+    if (!/^\d+$/.test(id)) {
+      res.statusCode = 400;
+      return res.end('bad request');
+    }
+    try {
+      await D.markPayoutPaid(id, form.get('ref'));
+    } catch (e) {
+      console.error('[admin] referral payout write failed:', e && e.message ? e.message : e);
+      return R.send(res, 502, R.shell({
+        title: 'Error', active: 'users',
+        body: `<div class="card"><p class="bad">That payout was NOT marked paid. Nothing was modified — check the server logs before sending again.</p><p><a href="/users?scope=referrals">Back to Referrals</a></p></div>`,
+      }));
+    }
+    res.statusCode = 303;
+    res.setHeader('location', '/users?scope=referrals');
+    return res.end();
+  }
+
   // ---- Guild CRM write (labels only — a guild has no access/trial row of its
   // own, see serversView). Same POST-then-redirect shape as the block above.
   if (path === '/guilds/label') {
@@ -494,7 +523,7 @@ function accessForm(p, days, label) {
 function usersSubNav(scope) {
   const item = (label, value) =>
     `<a href="/users${value ? `?scope=${value}` : ''}" class="pill ${scope === value ? 'on' : ''}">${esc(label)}</a>`;
-  return `<div style="display:flex;gap:6px;margin-bottom:14px">${item('People', '')}${item('Servers', 'guilds')}</div>`;
+  return `<div style="display:flex;gap:6px;margin-bottom:14px">${item('People', '')}${item('Servers', 'guilds')}${item('Referrals', 'referrals')}</div>`;
 }
 
 // Guild CRM vocabulary. No trial/access action here on purpose — a guild has
@@ -666,7 +695,103 @@ async function viewActivity() {
 async function viewUsers(query) {
   if (query.id) return viewUserDetail(query.id);
   if (query.scope === 'guilds') return serversView();
+  if (query.scope === 'referrals') return referralsView();
   return peopleView(query.filter, query.q);
+}
+
+// ---- Users tab: Referrals sub-view ------------------------------------------
+// Refer & earn pays real cash on a cumulative milestone ladder (1 ref = $5,
+// 3 = $20, 5 = $40, 9 = $70, 25 = $150). This view is a PAYOUT QUEUE, not a
+// calculator: the bot decides who is owed what and writes referral_payouts, and
+// the only thing that happens here is a human recording that money was sent.
+// Nothing is ever paid automatically — there are no payout rails in this stack.
+async function referralsView() {
+  const [refs, payouts, testers] = await Promise.all([
+    D.loadReferrals(), D.loadReferralPayouts(), D.loadTesters(),
+  ]);
+  const nameOf = (platform, id) => {
+    const t = testers.find((x) => x.platform === platform && x.platform_id === id);
+    return t && t.name && t.name !== 'auto' && t.name !== 'granted' ? t.name : shortId(id);
+  };
+  const person = (platform, id) =>
+    `<a class="rowlink" href="/users?id=${encodeURIComponent(id)}"><strong>${esc(nameOf(platform, id))}</strong></a>` +
+    `<div class="muted mono" style="font-size:11px">${esc(platform)}:${esc(id)}</div>`;
+
+  const byStatus = (s) => refs.filter((r) => r.status === s).length;
+  const owed = payouts.filter((p) => p.status === 'payable');
+  const held = payouts.filter((p) => p.status === 'held');
+  const owedUsd = owed.reduce((s, p) => s + Number(p.topup_usd || 0), 0);
+  const paidUsd = payouts.filter((p) => p.status === 'paid').reduce((s, p) => s + Number(p.topup_usd || 0), 0);
+
+  const payoutRow = (p) => `<tr>
+      <td>${person(p.referrer_platform, p.referrer_platform_id)}</td>
+      <td class="mono">${p.milestone_refs} ref${p.milestone_refs === 1 ? '' : 's'}</td>
+      <td class="mono"><strong>${usd(Number(p.topup_usd))}</strong></td>
+      <td class="mono muted">${usd(Number(p.cumulative_usd))} total</td>
+      <td class="muted">${ago(p.reached_at)}</td>
+      <td>${p.status === 'paid'
+        ? `<span class="tag paid">paid ${ymd(p.paid_at)}</span>${p.payout_ref ? `<div class="muted mono" style="font-size:11px">${esc(p.payout_ref)}</div>` : ''}`
+        : `<form method="POST" action="/referral-paid" style="display:flex;gap:6px">
+             <input type="hidden" name="id" value="${esc(String(p.id))}">
+             <input class="input" name="ref" placeholder="tx / ref" style="width:110px;font-size:12px">
+             <button class="btn" type="submit">Mark paid</button>
+           </form>`}
+        ${p.note ? `<div class="muted" style="font-size:11px">${esc(p.note)}</div>` : ''}</td>
+    </tr>`;
+
+  // Leaderboard: who is actually driving this.
+  const board = new Map();
+  for (const r of refs) {
+    const k = `${r.referrer_platform}:${r.referrer_platform_id}`;
+    const e = board.get(k) || { platform: r.referrer_platform, id: r.referrer_platform_id, pending: 0, converted: 0, qualified: 0 };
+    if (r.status === 'pending') e.pending++;
+    else if (r.status === 'converted') e.converted++;
+    else if (r.status === 'qualified') e.qualified++;
+    board.set(k, e);
+  }
+  const boardRows = [...board.values()]
+    .sort((a, b) => b.qualified - a.qualified || b.converted - a.converted || b.pending - a.pending)
+    .map((e) => {
+      const earned = payouts
+        .filter((p) => p.referrer_platform === e.platform && p.referrer_platform_id === e.id)
+        .reduce((s, p) => s + Number(p.topup_usd || 0), 0);
+      return `<tr>
+        <td>${person(e.platform, e.id)}</td>
+        <td class="mono">${e.qualified}</td>
+        <td class="mono muted">${e.converted}</td>
+        <td class="mono muted">${e.pending}</td>
+        <td class="mono">${earned ? usd(earned) : '<span class="muted">—</span>'}</td>
+      </tr>`;
+    }).join('');
+
+  const refRows = refs.slice(0, 60).map((r) => `<tr>
+      <td>${person(r.referrer_platform, r.referrer_platform_id)}</td>
+      <td>${person(r.referred_platform, r.referred_platform_id)}</td>
+      <td class="mono muted">${esc(r.code)}</td>
+      <td><span class="tag ${r.status === 'qualified' ? 'paid' : r.status === 'void' ? 'lapsed' : 'trial'}">${esc(r.status)}</span></td>
+      <td class="muted">${ago(r.referred_at)}</td>
+      <td class="muted">${r.converted_at ? ago(r.converted_at) : '—'}</td>
+    </tr>`).join('');
+
+  const body = `
+    ${usersSubNav('referrals')}
+    <div class="grid4">
+      ${stat('Owed now', usd(owedUsd), owed.length ? `${owed.length} payout${owed.length === 1 ? '' : 's'} to send` : 'nothing to send')}
+      ${stat('Paid out', usd(paidUsd), 'all time')}
+      ${stat('Qualified referrals', String(byStatus('qualified')), 'past the 7-day holdback')}
+      ${stat('In flight', String(byStatus('pending') + byStatus('converted')), `${byStatus('converted')} paying, in holdback`)}
+    </div>
+    ${held.length ? `<p class="bad" style="margin:0 0 10px;font-size:12.5px">${held.length} payout${held.length === 1 ? ' is' : 's are'} HELD — over the per-month cap. Review before paying; this is what farming looks like.</p>` : ''}
+    ${card('Payout queue · send these, then mark paid', table(
+      ['Referrer', 'Milestone', 'Send', 'Cumulative', 'Reached', 'Action'],
+      [...held, ...owed].map(payoutRow).join('') ,
+    ) + `<p class="muted" style="margin-top:8px">Amounts are cumulative-ladder top-ups, already computed by the bot — <strong>Send</strong> is what to actually transfer. There are no payout rails in this stack, so every payment is manual and deliberate.</p>`)}
+    ${card('Referrers', table(['Person', 'Qualified', 'Paying (holdback)', 'Pending', 'Earned'], boardRows))}
+    ${card('Recent referrals', table(['Referrer', 'Referred', 'Code', 'Status', 'Referred', 'Converted'], refRows)
+      + `<p class="muted" style="margin-top:8px">pending = signed up, not paying · converted = paying, inside the 7-day holdback · qualified = counts toward a milestone · void = self-referral or refunded.</p>`)}
+    ${payouts.filter((p) => p.status === 'paid').length
+      ? card('Paid history', table(['Referrer', 'Milestone', 'Sent', 'Cumulative', 'Reached', 'Status'], payouts.filter((p) => p.status === 'paid').map(payoutRow).join(''))) : ''}`;
+  return R.shell({ title: 'pip · admin — referrals', active: 'users', body, updated: new Date() });
 }
 
 async function viewUserDetail(id) {

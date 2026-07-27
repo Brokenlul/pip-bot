@@ -98,6 +98,9 @@ const Schema = z
     // Payment/upgrade link shown when a user's trial lapses. Optional —
     // without it Pip says paid access is coming.
     BETA_UPGRADE_URL: z.string().optional(),
+    // Public site origin, used to build refer-&-earn links. Defaults to prod;
+    // override to point a staging bot at a preview deployment.
+    PIP_SITE_BASE_URL: z.string().optional(),
     // The main Pip community server. Joiners there get a one-time welcome DM
     // and are recorded as leads. Deliberately opt-in by id rather than "any
     // server": DM-ing everyone who joins ANY server Pip sits in would be

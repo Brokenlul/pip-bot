@@ -11,6 +11,7 @@
  * delay a real reply, so callers fire and forget.
  */
 import { getDb } from './db.js';
+import { recordReferral } from './referral.js';
 
 // Exactly what assets/track.js mints. Anything else is noise — a user typing
 // /start with random text, or someone poking at the deep link.
@@ -70,13 +71,19 @@ export async function claimAttribution(args: ClaimArgs): Promise<void> {
   // Look up the click that minted the token so the visitor id (and the moment
   // they clicked) carry across. No match just means the beacon was lost or the
   // token is bogus — still worth recording the arrival itself.
+  // `meta` comes along for the ride so a refer-&-earn code stamped onto the
+  // click (assets/track.js) reaches the bot with no extra handoff plumbing —
+  // the Telegram deep-link payload is already full, and this row is the only
+  // other thing that crosses the boundary.
   const { data } = await db
     .from('site_events')
-    .select('visitor_id, created_at')
+    .select('visitor_id, created_at, meta')
     .eq('event', 'click')
     .eq('meta->>token', args.token)
     .limit(1);
-  const click = data?.[0] as { visitor_id: string; created_at: string } | undefined;
+  const click = data?.[0] as
+    | { visitor_id: string; created_at: string; meta: { ref?: string } | null }
+    | undefined;
 
   await db
     .from('attribution_claims')
@@ -98,4 +105,18 @@ export async function claimAttribution(args: ClaimArgs): Promise<void> {
     `[attribution] claimed ${args.intent} token for ${args.platform}:${args.platformId ?? args.guildId}` +
       (click ? ` (visitor ${click.visitor_id.slice(0, 8)}…)` : ' (no matching click)'),
   );
+
+  // Refer & earn: this is the automatic path. A person who arrived via someone
+  // else's /r/<code> link gets attached to that referrer here, without either
+  // of them doing anything. Best-effort — a failed referral must never affect
+  // the arrival itself, which is the whole point of this function.
+  const ref = click?.meta?.ref;
+  if (ref && args.platformId) {
+    await recordReferral({
+      code: ref,
+      referredPlatform: args.platform,
+      referredPlatformId: args.platformId,
+      visitorId: click?.visitor_id ?? null,
+    }).catch((e) => console.warn(`[attribution] referral: ${(e as Error).message}`));
+  }
 }

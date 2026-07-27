@@ -61,6 +61,36 @@ async function sbWrite(path, method, body, extraPrefer) {
   return r.status === 204 ? null : r.json().catch(() => null);
 }
 
+// ---- refer & earn -----------------------------------------------------------
+// The dashboard only ever READS the money. All reward arithmetic lives in the
+// bot (src/memory/referral.ts) so there is exactly one implementation of the
+// ladder — a second copy here would eventually drift and pay a wrong amount.
+
+async function loadReferrals(limit = 5000) {
+  return sb(
+    `referrals?select=id,code,referrer_platform,referrer_platform_id,referred_platform,referred_platform_id,referred_at,converted_at,qualified_at,subscription_provider,status,meta&order=referred_at.desc&limit=${limit}`,
+  );
+}
+
+async function loadReferralPayouts(limit = 5000) {
+  return sb(
+    `referral_payouts?select=id,referrer_platform,referrer_platform_id,milestone_refs,cumulative_usd,topup_usd,reached_at,status,paid_at,payout_ref,note&order=reached_at.desc&limit=${limit}`,
+  );
+}
+
+/**
+ * Mark a milestone payout as sent. The only write this view makes, and it is
+ * scoped to a single payout id — the console can record that money moved, never
+ * decide how much or create a new obligation.
+ */
+async function markPayoutPaid(id, ref) {
+  return sbWrite(`referral_payouts?id=eq.${encodeURIComponent(id)}`, 'PATCH', {
+    status: 'paid',
+    paid_at: new Date().toISOString(),
+    payout_ref: (ref || '').slice(0, 200) || null,
+  });
+}
+
 async function loadAttribution(limit = 5000) {
   return sb(`attribution_claims?select=token,visitor_id,intent,minted_at,claimed_at,platform,platform_id,guild_id,meta&order=claimed_at.desc&limit=${limit}`);
 }
@@ -505,5 +535,6 @@ module.exports = {
   sb, loadUsage, loadTesters, loadFeedback, loadSafetyEvents, loadSiteEvents, loadGuilds, loadActivity, loadUserConversations, loadUserProfile,
   loadGuildLabels, saveGuildLabel, loadHeartbeat, loadSentimentEvents, loadConversationsByMessageIds,
   loadAttribution, loadLabels, saveLabels, setAccess,
+  loadReferrals, loadReferralPayouts, markPayoutPaid,
   loadPayments, classify, tierPrice, inferBilling, overviewMetrics, guildAccess, TIER, DAY, TRIAL_DAYS,
 };

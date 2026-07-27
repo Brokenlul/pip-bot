@@ -16,7 +16,10 @@
     "register-commands": "tsx src/scripts/register-commands.ts",
     "migrate": "tsx src/scripts/migrate.ts",
     "welcome-member": "tsx src/scripts/welcome-member.ts",
-    "check-wires": "tsx src/scripts/check-wires.ts"
+    "check-wires": "tsx src/scripts/check-wires.ts",
+    "test:ladder": "tsx src/beta/referral-ladder.test.ts",
+    "test": "npm run test:ladder && npm run test:site",
+    "verify-referrals": "tsx src/scripts/verify-referrals.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.40.0",

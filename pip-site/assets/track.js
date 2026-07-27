@@ -54,6 +54,26 @@
   // events, so a click on day 3 is still credited to the tweet that landed them.
   var q = new URLSearchParams(location.search);
   var attr = { source: q.get('utm_source'), medium: q.get('utm_medium'), campaign: q.get('utm_campaign') };
+
+  // ---- refer & earn --------------------------------------------------------
+  // /r/<code> redirects here with ?ref=<code>. Stored first-touch, exactly like
+  // utm above, so someone who clicks a friend's link and only signs up two days
+  // later is still credited to that friend. It rides out on the CTA click below
+  // (into site_events.meta), which is where the bot reads it back — no separate
+  // handoff, because the Telegram deep-link payload is already spoken for.
+  var REF_KEY = 'pip_ref';
+  var ref = null;
+  try {
+    var incoming = (q.get('ref') || '').toLowerCase();
+    // Same alphabet/length the bot mints (src/memory/referral.ts). Anything
+    // else is someone poking at the parameter.
+    if (/^[a-hj-km-np-z2-9]{6}$/.test(incoming)) {
+      localStorage.setItem(REF_KEY, incoming);
+      ref = incoming;
+    } else {
+      ref = localStorage.getItem(REF_KEY);
+    }
+  } catch (e) { ref = null; }
   try {
     if (attr.source || attr.medium || attr.campaign) {
       localStorage.setItem(ATTR_KEY, JSON.stringify(attr));
@@ -180,7 +200,15 @@
     var name = nameFor(href);
     if (name) {
       var token = attribute(el, href, name);
-      send('click', name, token ? { token: token } : null);
+      // The referral code travels WITH the handoff token, in the same row the
+      // bot already reads on arrival (claimAttribution). Without the token
+      // there is nothing for the bot to look the row up by, so a bare ref is
+      // still recorded for the funnel but can't credit anyone automatically —
+      // that's what the "ref <code>" DM claim covers.
+      var meta = null;
+      if (token) meta = ref ? { token: token, ref: ref } : { token: token };
+      else if (ref) meta = { ref: ref };
+      send('click', name, meta);
     }
   }, true);
 })();

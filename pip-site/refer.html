@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Refer & earn — pip</title>
+<meta name="description" content="Earn cash when people you refer subscribe to pip. $5 for your first, up to $150 at 25 referrals. No cap on how many friends you invite.">
+<link rel="canonical" href="https://pipinvest.xyz/refer">
+<meta name="theme-color" content="#F2F7EE">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%230E3B26'/%3E%3Ccircle cx='16' cy='15' r='4.5' fill='%231FBE6C'/%3E%3C/svg%3E">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="pip">
+<meta property="og:url" content="https://pipinvest.xyz/refer">
+<meta property="og:title" content="Refer & earn — pip">
+<meta property="og:description" content="Earn cash when people you refer subscribe to pip. $5 for your first, up to $150 at 25 referrals.">
+<meta property="og:image" content="https://pipinvest.xyz/assets/og.png">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:site" content="@pipinvestbot">
+<meta name="twitter:title" content="Refer & earn — pip">
+<meta name="twitter:description" content="Earn cash when people you refer subscribe to pip.">
+<meta name="twitter:image" content="https://pipinvest.xyz/assets/og.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --cream: #F2F7EE;
+    --ink: #08160F;
+    --muted: #5C6E63;
+    --green: #12A15A;
+    --green-bright: #1FBE6C;
+    --mint: #7FE3A6;
+    --border: #D8E6D3;
+    --forest: #0E3B26;
+    --clay: #C25B37;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; background: var(--cream); overflow-x: clip; }
+  body { font-family: 'Geist', system-ui, sans-serif; color: var(--ink); -webkit-font-smoothing: antialiased; line-height: 1.6; }
+  ::selection { background: var(--green); color: var(--cream); }
+  a { color: var(--green); text-decoration: none; -webkit-tap-highlight-color: transparent; }
+  a:hover { color: var(--green-bright); }
+  .mono { font-family: 'Geist Mono', ui-monospace, monospace; }
+
+  nav { position: sticky; top: 16px; z-index: 50; display: flex; justify-content: center; padding: 0 24px; }
+  .nav-pill { background: rgba(255,255,255,0.92); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); border: 1px solid rgba(216,230,211,0.7); border-radius: 999px; box-shadow: 0 12px 40px -12px rgba(14,59,38,0.25), 0 2px 8px rgba(8,22,15,0.05); padding: 8px 22px; height: 56px; display: flex; align-items: center; gap: 24px; max-width: 100%; }
+  .pip-logo { text-decoration: none; color: var(--ink); display: flex; align-items: baseline; font-weight: 600; letter-spacing: -0.02em; line-height: 1; font-size: 22px; }
+  .pip-dot { position: relative; display: inline-block; }
+  .pip-dot span { position: absolute; top: 1px; left: 50%; transform: translateX(-50%); width: 5px; height: 5px; border-radius: 50%; background: var(--green); box-shadow: 0 0 8px 2px rgba(127,227,166,0.7); }
+  .nav-links { display: flex; align-items: center; gap: 22px; font-size: 14px; }
+  .nav-link { color: var(--muted); }
+  .nav-link:hover { color: var(--ink); }
+  .nav-link.current { color: var(--ink); }
+  @media (max-width: 640px) { .nav-links .hide-sm { display: none; } }
+
+  .wrap { max-width: 860px; margin: 0 auto; padding: 72px 24px 40px; }
+  .eyebrow { font-family: 'Geist Mono', ui-monospace, monospace; font-size: 13px; letter-spacing: 0.14em; color: var(--green); }
+  h1 { font-size: clamp(40px, 7vw, 60px); letter-spacing: -0.035em; font-weight: 600; line-height: 1.04; margin: 18px 0 0; }
+  .lede { font-size: 19px; color: var(--muted); max-width: 620px; margin: 20px 0 0; }
+  h2 { font-size: 26px; letter-spacing: -0.02em; font-weight: 600; margin: 56px 0 0; scroll-margin-top: 90px; }
+  h3 { font-size: 17px; font-weight: 600; margin: 28px 0 0; }
+  p { margin: 14px 0 0; color: #1c2a22; }
+  ul { margin: 14px 0 0; padding-left: 0; list-style: none; }
+  li { position: relative; padding-left: 22px; margin: 10px 0; color: #1c2a22; }
+  li::before { content: '⟩'; position: absolute; left: 0; color: var(--green); }
+  code { font-family: 'Geist Mono', ui-monospace, monospace; font-size: 0.9em; background: #EAF1E4; border: 1px solid var(--border); border-radius: 6px; padding: 1px 6px; color: var(--forest); }
+  .card { background: #FFFFFF; border: 1px solid var(--border); border-radius: 16px; padding: 24px 26px; margin-top: 20px; }
+  .btn { display: inline-block; background: var(--green); color: #FFFFFF; font-size: 15px; font-weight: 500; padding: 12px 22px; border-radius: 10px; }
+  .btn:hover { background: var(--green-bright); color: #FFFFFF; }
+  .btn.ghost { background: transparent; color: var(--ink); border: 1px solid var(--border); }
+  .btn.ghost:hover { border-color: var(--green); color: var(--green); }
+  .btn-row { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 20px; }
+  .disclaimer { margin-top: 56px; border-top: 1px solid var(--border); padding-top: 20px; font-size: 13px; color: var(--muted); }
+
+  /* Three steps */
+  .steps { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin-top: 28px; }
+  .step { background: #FFFFFF; border: 1px solid var(--border); border-radius: 16px; padding: 22px; }
+  .step-n { font-family: 'Geist Mono', ui-monospace, monospace; font-size: 12px; letter-spacing: 0.14em; color: var(--green); }
+  .step h3 { margin: 10px 0 0; font-size: 16px; }
+  .step p { font-size: 14.5px; color: var(--muted); margin-top: 6px; }
+  @media (max-width: 720px) { .steps { grid-template-columns: 1fr; } }
+
+  /* The ladder — the whole pitch, so it gets to be the loudest thing here. */
+  .ladder { margin-top: 26px; border: 1px solid var(--border); border-radius: 16px; overflow: hidden; background: #FFFFFF; }
+  .rung { display: flex; align-items: center; gap: 18px; padding: 16px 22px; border-top: 1px solid var(--border); }
+  .rung:first-child { border-top: none; }
+  .rung-refs { font-family: 'Geist Mono', ui-monospace, monospace; font-size: 13px; color: var(--muted); width: 108px; flex-shrink: 0; }
+  .rung-bar { flex: 1; height: 8px; border-radius: 999px; background: #EAF1E4; overflow: hidden; }
+  .rung-fill { height: 100%; border-radius: 999px; background: linear-gradient(90deg, var(--green), var(--mint)); }
+  .rung-usd { font-family: 'Geist Mono', ui-monospace, monospace; font-size: 20px; font-weight: 600; width: 78px; text-align: right; flex-shrink: 0; letter-spacing: -0.02em; }
+  .rung.top { background: linear-gradient(90deg, rgba(127,227,166,0.14), transparent); }
+  @media (max-width: 560px) {
+    .rung { gap: 12px; padding: 14px 16px; }
+    .rung-refs { width: 84px; font-size: 12px; }
+    .rung-usd { width: 64px; font-size: 17px; }
+  }
+
+  .faq-q { font-weight: 600; margin-top: 24px; }
+  .faq-a { color: var(--muted); margin-top: 6px; }
+
+  footer { background: var(--forest); background-image: radial-gradient(rgba(127,227,166,0.13) 1px, transparent 1px); background-size: 26px 26px; padding: 48px 24px; }
+  .foot-inner { max-width: 860px; margin: 0 auto; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 16px; font-family: 'Geist Mono', ui-monospace, monospace; font-size: 12px; color: rgba(242,247,238,0.5); }
+  .foot-inner a { color: rgba(242,247,238,0.5); }
+  .foot-inner a:hover { color: var(--mint); }
+  .foot-links { display: flex; flex-wrap: wrap; gap: 20px; }
+</style>
+</head>
+<body>
+
+<nav>
+  <div class="nav-pill">
+    <a href="/" class="pip-logo">p<span class="pip-dot">ı<span></span></span>p</a>
+    <div class="nav-links">
+      <a href="/#what" class="nav-link hide-sm">Product</a>
+      <a href="/#pricing" class="nav-link">Pricing</a>
+      <a href="/docs" class="nav-link">Docs</a>
+      <a href="/refer" class="nav-link current">Refer</a>
+    </div>
+  </div>
+</nav>
+
+<div class="wrap">
+  <div class="eyebrow">⟩ REFER &amp; EARN</div>
+  <h1>Get paid for the people you send.</h1>
+  <p class="lede">If someone you refer subscribes to pip, you earn cash. It starts at $5 for your first and climbs to $150. There's no cap on how many people you invite.</p>
+
+  <div class="steps">
+    <div class="step">
+      <div class="step-n">01</div>
+      <h3>Get your link</h3>
+      <p>DM pip <span class="mono">my referral link</span> on Discord or Telegram. It comes back instantly, tied to your account.</p>
+    </div>
+    <div class="step">
+      <div class="step-n">02</div>
+      <h3>Share it</h3>
+      <p>Send it to traders who'd actually use pip. Your link tracks them even if they subscribe days later.</p>
+    </div>
+    <div class="step">
+      <div class="step-n">03</div>
+      <h3>Earn</h3>
+      <p>When they subscribe and stay past the first week, you move up the ladder and we pay you.</p>
+    </div>
+  </div>
+
+  <h2 id="ladder">The ladder</h2>
+  <p>Amounts are <strong>totals, not per referral</strong> — reaching a new rung tops you up to that number. Get to 3 referrals and you'll have earned $20 in all, not $20 each.</p>
+
+  <div class="ladder">
+    <div class="rung">
+      <div class="rung-refs">1 referral</div>
+      <div class="rung-bar"><div class="rung-fill" style="width:3%"></div></div>
+      <div class="rung-usd">$5</div>
+    </div>
+    <div class="rung">
+      <div class="rung-refs">3 referrals</div>
+      <div class="rung-bar"><div class="rung-fill" style="width:13%"></div></div>
+      <div class="rung-usd">$20</div>
+    </div>
+    <div class="rung">
+      <div class="rung-refs">5 referrals</div>
+      <div class="rung-bar"><div class="rung-fill" style="width:27%"></div></div>
+      <div class="rung-usd">$40</div>
+    </div>
+    <div class="rung">
+      <div class="rung-refs">9 referrals</div>
+      <div class="rung-bar"><div class="rung-fill" style="width:47%"></div></div>
+      <div class="rung-usd">$70</div>
+    </div>
+    <div class="rung top">
+      <div class="rung-refs">25 referrals</div>
+      <div class="rung-bar"><div class="rung-fill" style="width:100%"></div></div>
+      <div class="rung-usd">$150</div>
+    </div>
+  </div>
+
+  <div class="btn-row">
+    <a class="btn" href="https://t.me/pipinvestbot" target="_blank" rel="noopener">Get my link on Telegram →</a>
+    <a class="btn ghost" href="https://discord.gg/zUvpPaYdAu" target="_blank" rel="noopener">Get my link on Discord →</a>
+  </div>
+  <p class="mono" style="font-size:13px;color:var(--muted);margin-top:14px">Already using pip? Just DM it <code>my referral link</code>.</p>
+
+  <h2 id="faq">Questions</h2>
+
+  <div class="faq-q">When does a referral count?</div>
+  <div class="faq-a">Once the person you referred has been a paying subscriber for 7 days. The wait covers refunds — we'd rather pay a week later than claw money back from you.</div>
+
+  <div class="faq-q">What counts as a referral?</div>
+  <div class="faq-a">Someone who signs up through your link and subscribes to any paid plan. Free trials don't count on their own, and neither does someone who was already a pip user.</div>
+
+  <div class="faq-q">How do I get paid?</div>
+  <div class="faq-a">Tell pip where to send it — USDC, UPI or PayPal. Payouts are sent manually, so allow a few days after a milestone clears.</div>
+
+  <div class="faq-q">Can I refer myself?</div>
+  <div class="faq-a">No, and it wouldn't be worth it. Every rung pays less than the subscriptions behind it cost, so the maths never works out in your favour. Self-referrals are rejected automatically.</div>
+
+  <div class="faq-q">Is there a limit?</div>
+  <div class="faq-a">No cap on referrals. The published ladder tops out at 25 — if you get there, message us, because at that point we should be talking properly.</div>
+
+  <div class="faq-q">My friend uses Discord. Does the link still work?</div>
+  <div class="faq-a">Yes. Discord invites can't carry a referral code, so your link shows them a short code like <code>ref abc123</code> to paste to pip in a DM. Same result.</div>
+
+  <p class="disclaimer">Referral rewards are discretionary and we may change or end the programme at any time. Referrals found to be fraudulent, self-directed or generated through spam earn nothing. See the <a href="/terms">terms</a> for the full version. Not financial advice.</p>
+</div>
+
+<footer>
+  <div class="foot-inner">
+    <div class="foot-links">
+      <a href="/">Home</a>
+      <a href="/docs">Docs</a>
+      <a href="/#pricing">Pricing</a>
+      <a href="/refer">Refer</a>
+      <a href="/privacy">Privacy</a>
+      <a href="/terms">Terms</a>
+      <a href="https://x.com/pipinvestbot" target="_blank" rel="noopener">X</a>
+      <a href="https://discord.gg/zUvpPaYdAu" target="_blank" rel="noopener">Discord</a>
+      <a href="https://t.me/pipinvestbot" target="_blank" rel="noopener">Telegram</a>
+    </div>
+    <span>pipinvest.xyz</span>
+  </div>
+</footer>
+
+<script defer src="/assets/track.js"></script>
+</body>
+</html>

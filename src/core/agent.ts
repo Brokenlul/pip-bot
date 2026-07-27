@@ -52,6 +52,8 @@ import { polymarketTool } from '../data/polymarket.js';
 import { kalshiTool } from '../data/kalshi.js';
 import { recentQuestionsTool } from '../data/memory-tool.js';
 import { marketPulseTool } from '../data/pulse-tool.js';
+import { referralLinkTool } from '../data/referral-tool.js';
+import { maybeClaimReferral } from './referral-claim.js';
 import { marketIntelTool, marketBackdrop } from '../data/companion.js';
 import { buildReply } from './formatter.js';
 import { pickAnswerModel } from './route.js';
@@ -373,6 +375,9 @@ function buildRegistry(): ToolRegistry {
     reg.register(setPriceAlertTool);
     reg.register(listPriceAlertsTool);
     reg.register(cancelPriceAlertTool);
+    // Refer & earn: the code lives on the user's beta_testers row, so this is
+    // meaningless without memory.
+    reg.register(referralLinkTool);
     // Earnings alerts need the reporting calendar as well as memory.
     if (finnhubEnabled()) reg.register(setEarningsAlertTool);
   }
@@ -435,6 +440,12 @@ export async function answer(msg: NormalizedMessage, opts: AnswerOptions = {}): 
       questionHash: questionHash(questionText),
     }).catch(() => {});
   }
+
+  // "ref abc123" in a DM links a referral. Handled here rather than in each
+  // adapter so both platforms get it from one place, and BEFORE any model call
+  // so it costs nothing and the model can't be talked out of it.
+  const referralReply = await maybeClaimReferral({ ...msg, text: questionText });
+  if (referralReply) return { body: referralReply, sources: [], asOf: new Date() };
 
   // Side-effects that must not block or delay the answer. incrementUsage
   // waits for the guild upsert (FK ordering) but the reply waits for neither.
