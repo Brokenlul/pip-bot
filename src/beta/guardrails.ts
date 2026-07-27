@@ -238,11 +238,10 @@ async function usageCountForScope(
 /** The slice of a beta_testers row the gate needs (trial window + plan). */
 interface TesterRow {
   access_until: string | null;
-  extension_used: boolean;
   tier?: string | null;
   subscription_status?: string | null;
 }
-const TESTER_COLS = 'access_until, extension_used, tier, subscription_status';
+const TESTER_COLS = 'access_until, tier, subscription_status';
 
 async function getTester(platform: string, platformId: string): Promise<TesterRow | null> {
   const db = getDb();
@@ -268,7 +267,7 @@ interface HandleRow extends TesterRow {
   subscription_status: string | null;
 }
 const HANDLE_COLS =
-  'access_until, extension_used, tier, subscription_provider, subscription_id, subscription_status';
+  'access_until, tier, subscription_provider, subscription_id, subscription_status';
 
 /** The later of two access_until values; 'infinity'/unparseable (never lapses) wins. */
 function laterAccess(a: string | null, b: string | null): string | null {
@@ -357,7 +356,7 @@ async function claimHandleRow(
   console.log(
     `[beta] merged ${hr.subscription_provider ?? 'invite'} grant into ${msg.platform}:${msg.userId}`,
   );
-  return { access_until: merged, extension_used: existing.extension_used };
+  return { access_until: merged };
 }
 
 /**
@@ -466,55 +465,19 @@ async function maybeAlert(spend: number, cap: number): Promise<void> {
   }
 }
 
-// ---- Trial window + one-time tweet extension --------------------------------
-// Every tester gets a 7-day window (DB default, 0006_trial.sql). When it
-// lapses they can unlock ONE extra week by tweeting about Pip and pasting the
-// link in chat. Verification is manual by design: the founder gets the link by
-// DM and revokes fakes in SQL — the $ caps bound what a fake can ever cost.
-
-const TWEET_URL_RE = /https?:\/\/(?:www\.)?(?:x|twitter)\.com\/\w{1,15}\/status\/\d+/i;
+// ---- Trial window -----------------------------------------------------------
+// Every tester gets a 7-day window (DB default, 0006_trial.sql), then they pay.
+//
+// The tweet-for-a-free-week extension was REMOVED 2026-07-27 (founder decision:
+// enough tweets). The beta_testers.extension_* columns are deliberately kept —
+// they hold the record of who claimed one while it ran, and the admin console
+// still reports that history. Nothing writes them any more.
 
 function accessLapsed(t: TesterRow, now: number): boolean {
   if (!t.access_until) return false; // row predates the trial migration — fail open
   const ends = new Date(t.access_until).getTime();
   // 'infinity' (never lapses) parses to NaN, and NaN comparisons are false.
   return Number.isFinite(ends) && now > ends;
-}
-
-/** Atomically claim the one tweet extension. False if already used (or DB down). */
-async function grantTweetExtension(msg: NormalizedMessage, tweetUrl: string): Promise<boolean> {
-  const db = getDb();
-  if (!db) return false;
-  const until = new Date(Date.now() + CAPS.trial.extensionDays * 86_400_000).toISOString();
-  const { data, error } = await db
-    .from('beta_testers')
-    .update({
-      access_until: until,
-      extension_used: true,
-      extension_tweet_url: tweetUrl,
-      extension_claimed_at: new Date().toISOString(),
-    })
-    .eq('platform', msg.platform)
-    .eq('platform_id', msg.userId)
-    .eq('extension_used', false) // the one-time guard, enforced in the row itself
-    .select('platform_id');
-  if (error) {
-    console.warn(`[beta] grantTweetExtension: ${error.message}`);
-    return false;
-  }
-  return (data?.length ?? 0) > 0;
-}
-
-/** DM the founder the claimed tweet link for manual verification. */
-async function notifyTweetClaim(msg: NormalizedMessage, tweetUrl: string): Promise<void> {
-  const cfg = getConfig();
-  if (!cfg.FOUNDER_DISCORD_ID || !founderNotifier) return;
-  await founderNotifier(
-    cfg.FOUNDER_DISCORD_ID,
-    `🐦 Tweet extension claimed by ${msg.platform}:${msg.userId} (${msg.userName ?? 'unknown'})\n${tweetUrl}\n` +
-      `If it's fake, revoke with: update beta_testers set access_until = now() ` +
-      `where platform = '${msg.platform}' and platform_id = '${msg.userId}';`,
-  ).catch(() => {});
 }
 
 function payLine(): string {
@@ -693,7 +656,7 @@ export async function betaGate(msg: NormalizedMessage): Promise<GateDecision> {
     // must not surface to a new arrival as a rejection. The spend caps below
     // still apply, so this cannot run away.
     console.warn(`[beta] enrol failed, serving open: ${msg.platform}:${msg.userId}`);
-    tester = { access_until: null, extension_used: false };
+    tester = { access_until: null };
   }
 
   // 2. Optional server / channel restriction — only bites when the env lists
@@ -736,26 +699,11 @@ export async function betaGate(msg: NormalizedMessage): Promise<GateDecision> {
     if (upgraded) tester = upgraded;
   }
   if (isDM && accessLapsed(tester, now)) {
-    const tweetUrl = msg.text.match(TWEET_URL_RE)?.[0];
-    if (tweetUrl && !tester.extension_used) {
-      if (await grantTweetExtension(msg, tweetUrl)) {
-        void notifyTweetClaim(msg, tweetUrl);
-        return blocked("Tweet received, you've unlocked one more free week 🌱 Enjoy! (I do check the links, so keep it up 👀)");
-      }
-      return blocked("Couldn't record that just now, paste the tweet link again in a minute.");
-    }
     // Reply on EVERY ping (founder decision 2026-07-15): a lapsed user who @s
     // Pip should always get the expired notice — never silence. Reactive only
     // (fires in response to their message, never an outbound DM), and it's a
     // canned string with no model call, so repeats cost nothing.
-    if (!tester.extension_used) {
-      return blocked(
-        'Your free week with Pip is up 🌱 Two ways to keep going:\n' +
-          '1. Tweet what you think of Pip, then paste the tweet link here. Unlocks one more free week (one time).\n' +
-          `2. Or ${payLine()}`,
-      );
-    }
-    return blocked(`Your bonus week is up. Thanks for testing Pip 🌱 To keep going, ${payLine()}`);
+    return blocked(`Your free week with Pip is up 🌱 To keep going, ${payLine()}`);
   }
 
   // 3. Cooldown (in-memory) — kills spam bursts & accidental double-fires.

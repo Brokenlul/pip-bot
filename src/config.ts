@@ -95,8 +95,8 @@ const Schema = z
     // Per-user daily spend cap (USD) — resets at midnight UTC like the other
     // daily caps. Follows the user across guilds and DMs.
     BETA_USER_DAILY_SPEND_USD: z.coerce.number().positive().default(2),
-    // Payment/upgrade link shown when a user's trial (and their one tweet
-    // extension) lapses. Optional — without it Pip says paid access is coming.
+    // Payment/upgrade link shown when a user's trial lapses. Optional —
+    // without it Pip says paid access is coming.
     BETA_UPGRADE_URL: z.string().optional(),
     // The main Pip community server. Joiners there get a one-time welcome DM
     // and are recorded as leads. Deliberately opt-in by id rather than "any

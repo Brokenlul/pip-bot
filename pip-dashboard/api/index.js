@@ -378,13 +378,13 @@ async function peopleView(filter, q) {
   const lapsedRows = lapsedUnpaidTesters
     .sort((a, b) => String(b.t.access_until || '').localeCompare(String(a.t.access_until || '')))
     .map((x) =>
-      `<tr><td class="mono">${esc(x.t.name || x.t.platform_id)}</td><td><span class="pill">${esc(x.t.platform)}</span></td><td class="mono" style="white-space:nowrap">${untilCell(x.t.access_until, now)}</td><td class="muted">${ymd(x.t.access_until)}</td><td>${x.t.extension_used ? 'used ext' : 'no ext'}</td></tr>`).join('');
+      `<tr><td class="mono">${esc(x.t.name || x.t.platform_id)}</td><td><span class="pill">${esc(x.t.platform)}</span></td><td class="mono" style="white-space:nowrap">${untilCell(x.t.access_until, now)}</td><td class="muted">${ymd(x.t.access_until)}</td></tr>`).join('');
 
   // Who to message today, soonest first — the whole point of the countdown.
   const expiringRows = expiringSoon
     .sort((a, b) => new Date(a.t.access_until) - new Date(b.t.access_until))
     .map((x) =>
-      `<tr><td class="mono"><a class="rowlink" href="/users?id=${encodeURIComponent(x.t.platform_id)}">${esc(x.t.name || x.t.platform_id)}</a></td><td><span class="pill">${esc(x.t.platform)}</span></td><td class="mono" style="white-space:nowrap">${untilCell(x.t.access_until, now)}</td><td class="muted">${ymd(x.t.access_until)}</td><td>${x.t.extension_used ? 'used ext' : 'no ext'}</td></tr>`).join('');
+      `<tr><td class="mono"><a class="rowlink" href="/users?id=${encodeURIComponent(x.t.platform_id)}">${esc(x.t.name || x.t.platform_id)}</a></td><td><span class="pill">${esc(x.t.platform)}</span></td><td class="mono" style="white-space:nowrap">${untilCell(x.t.access_until, now)}</td><td class="muted">${ymd(x.t.access_until)}</td></tr>`).join('');
   const extRows = extendedTesters.map((t) =>
     `<tr><td class="mono">${esc(t.name || t.platform_id)}</td><td class="muted">${t.extension_claimed_at ? ago(t.extension_claimed_at) : '—'}</td><td>${t.extension_tweet_url ? `<a class="rowlink" href="${esc(t.extension_tweet_url)}" target="_blank" rel="noopener">tweet ↗</a>` : '<span class="muted">no link</span>'}</td></tr>`).join('');
 
@@ -442,14 +442,15 @@ async function peopleView(filter, q) {
         ['Person', 'Stage', 'Source', 'Msgs 7d', 'Spend 7d', 'Msgs all-time', 'Spend all-time', 'Last active', 'Access until', 'Status', 'Access'],
         bodyRows,
       ))}
-      ${expiringRows ? card('Expiring ≤48h · outreach list', table(['User', 'Platform', 'Time left', 'Expires', 'Extension'], expiringRows)) : ''}
-      ${card('Lapsed & unpaid · re-engage or let go', table(['User', 'Platform', 'Lapsed', 'Ended', 'Extension'], lapsedRows))}
-      ${card('Tweet extensions claimed · verify the links', table(['User', 'Claimed', 'Tweet'], extRows))}
+      ${expiringRows ? card('Expiring ≤48h · outreach list', table(['User', 'Platform', 'Time left', 'Expires'], expiringRows)) : ''}
+      ${card('Lapsed & unpaid · re-engage or let go', table(['User', 'Platform', 'Lapsed', 'Ended'], lapsedRows))}
+      ${extRows ? card('Tweet extensions claimed · retired 2026-07-27', table(['User', 'Claimed', 'Tweet'], extRows)
+        + `<p class="muted" style="margin-top:8px">The tweet-for-a-free-week offer no longer exists. Kept as the record of who claimed one while it ran; no new rows can appear here.</p>`) : ''}
       <div class="card"><p class="muted">
         A <strong>lead</strong> arrived but never sent a message. Source is only known where the
         handoff could carry a token: the community invite takes no per-visitor parameter, so those
-        joins show as "community join" with no visitor. Extensions run from now, not from the old
-        expiry, and never consume the user's tweet-for-a-week grant.
+        joins show as "community join" with no visitor. Grants run from now, not from the old
+        expiry — extending a lapsed user from a past date grants them nothing.
       </p></div>`,
   });
 }
