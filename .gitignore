@@ -8,6 +8,10 @@ dist/
 .idea/
 .vscode/
 coverage/
+.vercel
 
 # Terminal Paste Image folder
 .cp-images/
+
+# Real user ids for one-off outreach — never commit PII
+src/scripts/fomc-outreach-recipients.json

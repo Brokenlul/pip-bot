@@ -195,47 +195,88 @@ function loginPage(err) {
 }
 
 // ---- 1. Overview -----------------------------------------------------------
+// Deliberately minimal: the daily spend cap (the thing that can silently stop
+// Pip answering), the two Ops health numbers, and two growth charts. Every
+// other pilot metric (activation/engagement/retention/quality, spend
+// breakdowns, top tools) moved out of the founder's daily glance-at-a-glance
+// view — they're still computed in D.overviewMetrics, just not shown here.
+const OVERVIEW_CHART_DAYS = 30;
+
 async function viewOverview() {
-  const [rows, testers, feedback] = await Promise.all([D.loadUsage(7), D.loadTesters(), D.loadFeedback(7)]);
+  const [rows, testers, feedback, chartRows] = await Promise.all([
+    D.loadUsage(7), D.loadTesters(), D.loadFeedback(7), D.loadUsage(OVERVIEW_CHART_DAYS),
+  ]);
   const m = D.overviewMetrics(rows, testers, feedback, CAPS, FOUNDER_KEYS);
   const spendFrac = CAPS.spend ? m.todaySpend / CAPS.spend : 0;
-  const msgFrac = CAPS.msgs ? m.todayMsgs / CAPS.msgs : 0;
-  const maxDay = Math.max(0.01, ...m.days.map((d) => d.spend));
-  // Messages today, by UTC hour — same bar-chart shape as the 7-day spend
-  // chart below, just bucketed finer so today's shape is legible at a glance.
-  const dayStartIso = new Date(new Date().toISOString().slice(0, 10)).toISOString();
-  const hourly = Array.from({ length: 24 }, (_, h) => ({ h, n: 0 }));
-  for (const r of rows) {
-    if (r.created_at < dayStartIso) continue;
-    hourly[new Date(r.created_at).getUTCHours()].n += 1;
+  const meter = (label, frac, value) => `<div class="card stat"><div class="eyebrow">${label}</div><div class="big">${value}</div><div class="meter"><div class="fill" style="width:${Math.min(100, frac * 100).toFixed(1)}%;background:${barColor(frac)}"></div></div><div class="muted">${pct(frac)} of daily cap${frac >= 0.8 ? ' · degrade' : ''}</div></div>`;
+  const opsValue = (metric) => (m.stack.find(([, name]) => name === metric) || [])[2] || '—';
+
+  // Two growth charts over a longer window than the 7-day figures above —
+  // hourly/weekly snapshots hide a slow climb; 30 days makes it visible.
+  const dayKeyOf = (ts) => new Date(ts).toISOString().slice(0, 10);
+  const last = Array.from({ length: OVERVIEW_CHART_DAYS }, (_, i) =>
+    new Date(Date.now() - (OVERVIEW_CHART_DAYS - 1 - i) * 864e5).toISOString().slice(0, 10));
+
+  // Raw message volume per day (every row in usage_log, not distinct users).
+  const messagesByDay = new Map();
+  for (const r of chartRows) {
+    const d = dayKeyOf(r.created_at);
+    messagesByDay.set(d, (messagesByDay.get(d) || 0) + 1);
   }
-  const maxHour = Math.max(1, ...hourly.map((x) => x.n));
-  const meter = (label, frac, value, cap) => `<div class="card stat"><div class="eyebrow">${label}</div><div class="big">${value}<span class="muted"> / ${cap}</span></div><div class="meter"><div class="fill" style="width:${Math.min(100, frac * 100).toFixed(1)}%;background:${barColor(frac)}"></div></div><div class="muted">${pct(frac)} of daily cap${frac >= 0.8 ? ' · degrade' : ''}</div></div>`;
-  const stackRows = m.stack.map(([layer, metric, value, ok, target]) =>
-    `<tr><td class="mono">${layer}</td><td>${metric}</td><td class="${ok ? 'ok' : String(value).startsWith('—') ? 'muted' : 'bad'}"><b>${value}</b></td><td class="muted">${target}</td><td>${String(value).startsWith('—') ? '<span class="muted">·</span>' : ok ? '<span class="ok">✓</span>' : '<span class="bad">✗</span>'}</td></tr>`).join('');
-  const toolRows = m.topTools.map(([t, c]) => `<tr><td class="mono">${esc(t)}</td><td>${c}</td></tr>`).join('');
+  const messageSeries = last.map((d) => ({ day: d, n: messagesByDay.get(d) || 0 }));
+  const maxMessages = Math.max(1, ...messageSeries.map((x) => x.n));
+
+  // New signups per day, from beta_testers.invited_at (first-seen).
+  const onboardByDay = new Map();
+  for (const t of testers) {
+    if (!t.invited_at) continue;
+    const d = dayKeyOf(t.invited_at);
+    onboardByDay.set(d, (onboardByDay.get(d) || 0) + 1);
+  }
+  const onboardSeries = last.map((d) => ({ day: d, n: onboardByDay.get(d) || 0 }));
+  const maxOnboard = Math.max(1, ...onboardSeries.map((x) => x.n));
+
+  // Inline SVG line chart — no charting library, stays zero-dependency. The
+  // viewBox is stretched to the card's actual width (preserveAspectRatio
+  // "none"), so stroke-width is pinned with vector-effect to keep the line
+  // a constant 2px regardless of how wide the card renders.
+  const lineChart = (series, max, unitLabel) => {
+    const W = 700, H = 130, PAD = 6;
+    const n = series.length;
+    const stepX = n > 1 ? (W - PAD * 2) / (n - 1) : 0;
+    const points = series.map((x, i) => [
+      PAD + i * stepX,
+      PAD + (H - PAD * 2) * (1 - x.n / max),
+    ]);
+    const line = points.map(([x, y]) => `${x.toFixed(1)},${y.toFixed(1)}`).join(' ');
+    const area = `${PAD},${H - PAD} ${line} ${points[points.length - 1][0].toFixed(1)},${H - PAD}`;
+    // Hoverable dots with a native <title> each — exact numbers on hover,
+    // no JS needed. The visible line stays clean; the count is one hover away.
+    const dots = points.map(([x, y], i) =>
+      `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="7" fill="var(--green)" fill-opacity="0.01" stroke="none"><title>${series[i].n} ${unitLabel} · ${series[i].day}</title></circle>`).join('');
+    // Value printed above the date on every column — visible in a screenshot,
+    // not just on hover (the <title> tooltips above are a nice-to-have, not
+    // the only way to read a number off this chart).
+    const ticks = series.map((x) =>
+      `<div class="col"><div class="tick" style="color:var(--ink);font-weight:600">${x.n}</div><div class="tick">${x.day.slice(5)}</div></div>`).join('');
+    return `<div>
+      <svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" style="width:100%;height:${H}px;display:block" role="img" aria-label="${unitLabel} per day">
+        <polygon points="${area}" fill="var(--green)" fill-opacity="0.12" stroke="none"></polygon>
+        <polyline points="${line}" fill="none" stroke="var(--green)" stroke-width="2" vector-effect="non-scaling-stroke"></polyline>
+        ${dots}
+      </svg>
+      <div class="chart" style="height:36px;padding-top:4px">${ticks}</div>
+    </div>`;
+  };
+
   const body = `
     <div class="grid3">
-      ${meter('Spend today', spendFrac, usd(m.todaySpend), usd(CAPS.spend))}
-      ${meter('Messages today', msgFrac, String(m.todayMsgs), String(CAPS.msgs))}
-      ${stat('Active testers today', `${m.activeTestersToday}<span class="muted"> / ${m.totalTesters}</span>`, 'on the allowlist')}
+      ${meter('Spend today', spendFrac, usd(m.todaySpend))}
+      ${stat('Cost / message', opsValue('Cost / message'), '7d avg · target ≤$0.06')}
+      ${stat('p95 latency', opsValue('p95 latency'), '7d · target <10s')}
     </div>
-    ${card('Pilot metric stack · testers only (founder excluded)', table(['Layer', 'Metric', 'Now', 'Target', ''], stackRows))}
-    <div class="grid4">
-      ${stat('Tester spend · today', usd(m.spend.tester))}
-      ${stat('Founder spend · today', usd(m.spend.founder), 'excluded')}
-      ${stat('Guest spend · today', usd(m.spend.guest), 'should be $0')}
-      ${stat('Surface · today', `${m.surface.srv}<span class="muted"> srv</span> · ${m.surface.dm}<span class="muted"> dm</span>`)}
-    </div>
-    <div class="grid4">
-      ${stat('Spend · 7d', usd(m.weekSpend))}
-      ${stat('Messages · 7d', m.weekMsgs.toLocaleString())}
-      ${stat('Cache hit rate', pct(m.cacheRate), 'served free')}
-      ${stat('Votes · 7d', `<span class="ok">▲ ${m.up}</span> · <span class="bad">▼ ${m.down}</span>`)}
-    </div>
-    ${card('Messages today · by hour (UTC)', `<div class="chart">${hourly.map((x) => `<div class="col"><div class="bar" style="height:${Math.max(2, (x.n / maxHour) * 120)}px" title="${x.n} msg${x.n === 1 ? '' : 's'}"></div><div class="tick">${String(x.h).padStart(2, '0')}</div></div>`).join('')}</div>`)}
-    ${card('Spend · last 7 days', `<div class="chart">${m.days.map((d) => `<div class="col"><div class="bar" style="height:${Math.max(2, (d.spend / maxDay) * 120)}px" title="${usd(d.spend)}"></div><div class="tick">${d.day.slice(5)}</div></div>`).join('')}</div>`)}
-    ${card('Top tools · 7d', table(['Tool', 'Calls'], toolRows))}`;
+    ${card(`Users onboarded · last ${OVERVIEW_CHART_DAYS} days · today ${onboardSeries[onboardSeries.length - 1].n}`, lineChart(onboardSeries, maxOnboard, 'onboarded'))}
+    ${card(`Messages · last ${OVERVIEW_CHART_DAYS} days · today ${messageSeries[messageSeries.length - 1].n}`, lineChart(messageSeries, maxMessages, 'messages'))}`;
   return R.shell({ title: 'pip · admin — overview', active: 'overview', body, updated: m.updated, refresh: true });
 }
 
@@ -303,7 +344,15 @@ async function viewPayments() {
 // this view exists. Merges the old People (funnel stage, labels, access
 // grant/revoke), Users (search, spend/msgs, drill-down link) and Trials
 // (expiring soon, trial→paid rate, tweet extensions, lapsed re-engage) views.
-async function peopleView(filter, q) {
+const SOURCE_LABEL = {
+  telegram: 'site → telegram', discord_bot: 'site → add-bot', discord_community: 'community join',
+};
+
+/**
+ * Build every known person, unfiltered — shared by peopleView and
+ * deadLeadsView so the two never drift on what "a person" is made of.
+ */
+async function buildPeopleRows() {
   const now = Date.now();
   const [testers, usageAll, claims, labels] = await Promise.all([
     D.loadTesters(), D.loadUsage(3650), D.loadAttribution(), D.loadLabels(),
@@ -378,6 +427,38 @@ async function peopleView(filter, q) {
 
   let rows = [...people.values()].map((p) => ({ ...p, stage: stageOf(p) }));
   if (FOUNDER_KEYS.size) rows = rows.filter((p) => !FOUNDER_KEYS.has(key(p.platform, p.platformId)));
+  return { rows, testers, now };
+}
+
+/** One <tr> for a person — shared by peopleView and deadLeadsView. */
+function personRow(p, now) {
+  const id = `${p.platform}:${p.platformId}`;
+  const until = untilCell(p.accessUntil, now);
+  return `<tr>
+    <td>
+      <div><a class="rowlink" href="/users?id=${encodeURIComponent(p.platformId)}"><strong>${esc(p.name || shortId(p.platformId))}</strong></a></div>
+      <div class="muted mono" style="font-size:11px">${esc(id)}</div>
+    </td>
+    <td><span class="tag ${p.stage === 'paid' ? 'paid' : p.stage === 'lapsed' ? 'lapsed' : p.stage === 'lead' ? 'guest' : 'trial'}">${p.stage}</span></td>
+    <td class="muted">${esc(SOURCE_LABEL[p.source] || '—')}${p.visitorId ? `<div class="mono" style="font-size:11px">visitor ${esc(p.visitorId.slice(0, 8))}…</div>` : ''}</td>
+    <td class="mono">${p.msgs7}</td>
+    <td class="mono">${usd4(p.spend7)}</td>
+    <td class="mono muted">${p.msgsAll}</td>
+    <td class="mono muted">${usd4(p.spendAll)}</td>
+    <td class="muted">${p.lastActive ? ago(p.lastActive) : '—'}</td>
+    <td class="mono" style="white-space:nowrap">${until}</td>
+    <td>${statusSelect(p)}</td>
+    <td style="white-space:nowrap">
+      ${accessForm(p, 7, '+7d')}
+      ${accessForm(p, 0, 'revoke')}
+    </td>
+  </tr>`;
+}
+
+async function peopleView(filter, q) {
+  const { rows: allRows, testers, now } = await buildPeopleRows();
+  // Dead leads live on their own tab, away from warm/hot — see deadLeadsView.
+  let rows = allRows.filter((p) => !p.labels.includes('dead lead'));
   const needle = (q || '').toLowerCase();
   if (needle) rows = rows.filter((p) => String(p.name || '').toLowerCase().includes(needle) || String(p.platformId).toLowerCase().includes(needle));
   if (filter) rows = rows.filter((p) => p.stage === filter || p.labels.includes(filter));
@@ -389,9 +470,6 @@ async function peopleView(filter, q) {
     String(b.lastActive || b.joinedAt || b.firstSeen || '').localeCompare(String(a.lastActive || a.joinedAt || a.firstSeen || '')));
 
   const counts = rows.reduce((m, p) => ({ ...m, [p.stage]: (m[p.stage] || 0) + 1 }), {});
-  const SOURCE_LABEL = {
-    telegram: 'site → telegram', discord_bot: 'site → add-bot', discord_community: 'community join',
-  };
 
   // Trial/conversion metrics — same semantics as the old Trials view
   // (beta_testers access state), a different lens than the funnel stage above.
@@ -417,32 +495,7 @@ async function peopleView(filter, q) {
   const extRows = extendedTesters.map((t) =>
     `<tr><td class="mono">${esc(t.name || t.platform_id)}</td><td class="muted">${t.extension_claimed_at ? ago(t.extension_claimed_at) : '—'}</td><td>${t.extension_tweet_url ? `<a class="rowlink" href="${esc(t.extension_tweet_url)}" target="_blank" rel="noopener">tweet ↗</a>` : '<span class="muted">no link</span>'}</td></tr>`).join('');
 
-  const bodyRows = rows.map((p) => {
-    const id = `${p.platform}:${p.platformId}`;
-    const lapsed = p.stage === 'lapsed';
-    // Countdown over calendar date: this column exists to decide who to message
-    // today. The date is still there on hover.
-    const until = untilCell(p.accessUntil, now);
-    return `<tr>
-      <td>
-        <div><a class="rowlink" href="/users?id=${encodeURIComponent(p.platformId)}"><strong>${esc(p.name || shortId(p.platformId))}</strong></a></div>
-        <div class="muted mono" style="font-size:11px">${esc(id)}</div>
-      </td>
-      <td><span class="tag ${p.stage === 'paid' ? 'paid' : p.stage === 'lapsed' ? 'lapsed' : p.stage === 'lead' ? 'guest' : 'trial'}">${p.stage}</span></td>
-      <td class="muted">${esc(SOURCE_LABEL[p.source] || '—')}${p.visitorId ? `<div class="mono" style="font-size:11px">visitor ${esc(p.visitorId.slice(0, 8))}…</div>` : ''}</td>
-      <td class="mono">${p.msgs7}</td>
-      <td class="mono">${usd4(p.spend7)}</td>
-      <td class="mono muted">${p.msgsAll}</td>
-      <td class="mono muted">${usd4(p.spendAll)}</td>
-      <td class="muted">${p.lastActive ? ago(p.lastActive) : '—'}</td>
-      <td class="mono" style="white-space:nowrap">${until}</td>
-      <td>${statusSelect(p)}</td>
-      <td style="white-space:nowrap">
-        ${accessForm(p, 7, '+7d')}
-        ${accessForm(p, 0, 'revoke')}
-      </td>
-    </tr>`;
-  }).join('');
+  const bodyRows = rows.map((p) => personRow(p, now)).join('');
 
   const chip = (label, value) =>
     `<a href="/users${value ? `?filter=${encodeURIComponent(value)}` : ''}" class="pill ${filter === value ? 'on' : ''}">${esc(label)}</a>`;
@@ -465,7 +518,7 @@ async function peopleView(filter, q) {
       ${card('Filter', `<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">
         ${chip('all', '')}${chip('leads', 'lead')}${chip('activated', 'activated')}${chip('returned', 'returned')}${chip('lapsed', 'lapsed')}${chip('paid', 'paid')}
         <span class="muted" style="margin:0 4px">·</span>
-        ${STATUSES.map((s) => chip(s, s)).join('')}
+        ${STATUSES.filter((s) => s !== 'dead lead').map((s) => chip(s, s)).join('')}
       </div>`)}
       ${card('People', table(
         ['Person', 'Stage', 'Source', 'Msgs 7d', 'Spend 7d', 'Msgs all-time', 'Spend all-time', 'Last active', 'Access until', 'Status', 'Access'],
@@ -523,7 +576,32 @@ function accessForm(p, days, label) {
 function usersSubNav(scope) {
   const item = (label, value) =>
     `<a href="/users${value ? `?scope=${value}` : ''}" class="pill ${scope === value ? 'on' : ''}">${esc(label)}</a>`;
-  return `<div style="display:flex;gap:6px;margin-bottom:14px">${item('People', '')}${item('Servers', 'guilds')}${item('Referrals', 'referrals')}</div>`;
+  return `<div style="display:flex;gap:6px;margin-bottom:14px">${item('People', '')}${item('Servers', 'guilds')}${item('Referrals', 'referrals')}${item('Dead leads', 'dead')}</div>`;
+}
+
+/** People labeled "dead lead" — moved off the main People view so it isn't
+ * cluttered by write-offs sitting alongside warm/hot leads. Relabeling
+ * someone here (via the same status dropdown) brings them right back. */
+async function deadLeadsView() {
+  const { rows: allRows, now } = await buildPeopleRows();
+  const rows = allRows
+    .filter((p) => p.labels.includes('dead lead'))
+    .sort((a, b) => String(b.lastActive || b.joinedAt || b.firstSeen || '').localeCompare(String(a.lastActive || a.joinedAt || a.firstSeen || '')));
+  const bodyRows = rows.map((p) => personRow(p, now)).join('');
+
+  return R.shell({
+    title: 'pip · admin — users · dead leads', active: 'users',
+    body: `
+      ${usersSubNav('dead')}
+      <div class="grid2">
+        ${stat('Dead leads', rows.length, 'excluded from People')}
+      </div>
+      ${card('Dead leads', table(
+        ['Person', 'Stage', 'Source', 'Msgs 7d', 'Spend 7d', 'Msgs all-time', 'Spend all-time', 'Last active', 'Access until', 'Status', 'Access'],
+        bodyRows,
+      ))}
+      <div class="card"><p class="muted">Change someone's status away from "dead lead" here to bring them back into the main People view.</p></div>`,
+  });
 }
 
 // Guild CRM vocabulary. No trial/access action here on purpose — a guild has
@@ -696,6 +774,7 @@ async function viewUsers(query) {
   if (query.id) return viewUserDetail(query.id);
   if (query.scope === 'guilds') return serversView();
   if (query.scope === 'referrals') return referralsView();
+  if (query.scope === 'dead') return deadLeadsView();
   return peopleView(query.filter, query.q);
 }
 
