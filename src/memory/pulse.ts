@@ -38,7 +38,7 @@ const THEMES: Array<[RegExp, string]> = [
   [/\bliquidat/i, 'liquidations'],
   [/\bcpi\b/i, 'cpi'],
   [/\bpce\b/i, 'pce'],
-  [/\b(fomc|fed|powell)\b/i, 'fomc'],
+  [/\b(fomc|fed|warsh|powell)\b/i, 'fomc'],
   [/\brate cut|rate hike|\bcut\b/i, 'rates'],
   [/\betf\b/i, 'etf'],
   [/\b(unemployment|jobs|nfp|payroll)\b/i, 'jobs'],

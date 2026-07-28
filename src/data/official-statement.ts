@@ -66,6 +66,14 @@ const InputSchema = z.object({
     .describe(
       'A URL on federalreserve.gov, home.treasury.gov, ecb.europa.eu, or bankofengland.co.uk (found via web_search).',
     ),
+  find: z
+    .string()
+    .min(2)
+    .max(120)
+    .optional()
+    .describe(
+      'Optional keyword/phrase. Returns the window of text around it instead of the document opening — use on long documents (minutes, press-conference transcripts) to reach a specific topic.',
+    ),
 });
 type Input = z.infer<typeof InputSchema>;
 
@@ -74,11 +82,38 @@ interface Output {
   title: string;
   text: string;
   truncated: boolean;
+  total_chars: number;
+  /** Present only when `find` was supplied. */
+  find?: { term: string; match_count: number; showing_from_char: number };
   source_url: string;
 }
 
 const MAX_CHARS = 8000;
-const cache = makeCache<Output>(30 * 60_000); // 30 min — a published statement never changes
+// Cache the FULL extracted text, not the windowed Output — the same document is
+// often read twice with different `find` terms (once for the rate language, once
+// for the labour-market language), and refetching a 21-page PDF for that is waste.
+const cache = makeCache<{ source: string; title: string; full: string }>(30 * 60_000); // 30 min — a published statement never changes
+
+/**
+ * A whole minutes/transcript blows past MAX_CHARS many times over, and the part
+ * that matters is rarely the opening. When `find` is given, centre the window on
+ * the first match and snap to a paragraph break so the excerpt starts cleanly.
+ */
+function window(full: string, find: string | undefined): { text: string; from: number; matches: number } {
+  if (!find) return { text: full.slice(0, MAX_CHARS), from: 0, matches: 0 };
+  const hay = full.toLowerCase();
+  const needle = find.toLowerCase();
+  let matches = 0;
+  for (let i = hay.indexOf(needle); i !== -1; i = hay.indexOf(needle, i + needle.length)) matches++;
+  const first = hay.indexOf(needle);
+  // No match: fall back to the opening rather than returning nothing, and let
+  // match_count: 0 tell the caller the term genuinely isn't in the document.
+  if (first === -1) return { text: full.slice(0, MAX_CHARS), from: 0, matches: 0 };
+  const rough = Math.max(0, first - Math.floor(MAX_CHARS / 3));
+  const para = full.indexOf('\n\n', rough);
+  const from = para !== -1 && para < first ? para + 2 : rough;
+  return { text: full.slice(from, from + MAX_CHARS), from, matches };
+}
 
 function decodeEntities(s: string): string {
   return s
@@ -135,13 +170,18 @@ async function extractPdfText(buf: ArrayBuffer): Promise<{ title: string | null;
 export const officialStatementTool: Tool<Input, Output> = {
   name: 'official_statement_text',
   description:
-    'Fetch the full, verbatim text of an official central-bank or treasury communication — FOMC statements/minutes, Fed testimony/speeches (federalreserve.gov), U.S. Treasury press releases (home.treasury.gov), ECB monetary policy statements (ecb.europa.eu), Bank of England policy summaries (bankofengland.co.uk), or Bank of Japan policy statements (boj.or.jp, published as PDF — handled automatically). Use this AFTER web_search finds the page to quote the exact official wording instead of paraphrasing secondhand coverage — precise wording changes between meetings ARE the signal. This is the consistent, standard way to ground any major policy event across all five. Does NOT cover live/extemporaneous Q&A during a hearing or press conference — use news_wire/web_search for that.',
+    'Fetch the full, verbatim text of an official central-bank or treasury communication — FOMC statements/minutes, Fed testimony/speeches (federalreserve.gov), U.S. Treasury press releases (home.treasury.gov), ECB monetary policy statements (ecb.europa.eu), Bank of England policy summaries (bankofengland.co.uk), or Bank of Japan policy statements (boj.or.jp, published as PDF — handled automatically). Use this AFTER web_search finds the page to quote the exact official wording instead of paraphrasing secondhand coverage — precise wording changes between meetings ARE the signal. This is the consistent, standard way to ground any major policy event across all five. It also reads the FOMC press-conference transcript PDF once published (federalreserve.gov/mediacenter/files/FOMCpresconf{YYYYMMDD}.pdf), which is where the chair\'s unscripted Q&A tone actually lives — pass `find` to reach a topic inside it. Does NOT cover a hearing or presser while it is still LIVE, before the transcript posts — use news_wire/web_search for that.',
   inputSchema: {
     type: 'object',
     properties: {
       url: {
         type: 'string',
         description: 'Page or PDF URL on federalreserve.gov, home.treasury.gov, ecb.europa.eu, bankofengland.co.uk, or boj.or.jp.',
+      },
+      find: {
+        type: 'string',
+        description:
+          'Optional keyword or phrase to centre the excerpt on ("balance sheet", "labor market", "inflation expectations"). Use on long documents — minutes and press-conference transcripts run far past the excerpt limit, so the default opening window will miss the part you want. Call again with a different term to read another section.',
       },
     },
     required: ['url'],
@@ -155,7 +195,7 @@ export const officialStatementTool: Tool<Input, Output> = {
         `official_statement_text only covers federalreserve.gov, home.treasury.gov, ecb.europa.eu, bankofengland.co.uk, and boj.or.jp.`,
       );
     }
-    return cache.wrap(input.url, async () => {
+    const doc = await cache.wrap(input.url, async () => {
       return withRetry(async () => {
         const res = await fetchWithTimeout(
           input.url,
@@ -190,16 +230,23 @@ export const officialStatementTool: Tool<Input, Output> = {
         }
 
         if (!full) throw new Error('No article text found at that URL — is it the right link?');
-        const truncated = full.length > MAX_CHARS;
-        return {
-          source: domain.label,
-          title,
-          text: truncated ? `${full.slice(0, MAX_CHARS)}…` : full,
-          truncated,
-          source_url: input.url,
-        };
+        return { source: domain.label, title, full };
       }, `official-statement:${input.url}`);
     });
+
+    const w = window(doc.full, input.find);
+    const truncated = doc.full.length > w.text.length;
+    return {
+      source: doc.source,
+      title: doc.title,
+      text: truncated ? `${w.text}…` : w.text,
+      truncated,
+      total_chars: doc.full.length,
+      ...(input.find
+        ? { find: { term: input.find, match_count: w.matches, showing_from_char: w.from } }
+        : {}),
+      source_url: input.url,
+    };
   },
   citation: (input, out) => ({ label: `${out.source} (${out.title})`, url: input.url }),
 };

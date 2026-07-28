@@ -22,6 +22,26 @@ const SERIES_ALIASES: Record<string, string> = {
   'fed funds': 'FEDFUNDS',
   fed_funds: 'FEDFUNDS',
   'fed funds rate': 'FEDFUNDS',
+  // Target range endpoints — daily, so they confirm the CURRENT policy setting,
+  // unlike FEDFUNDS (the monthly effective average, which lags a fresh decision).
+  'target range upper': 'DFEDTARU',
+  'target range lower': 'DFEDTARL',
+  'fed funds target': 'DFEDTARU',
+  // The macro deltas an FOMC read turns on between meetings.
+  'real yield': 'DFII10',
+  '10y real yield': 'DFII10',
+  breakeven: 'T10YIE',
+  'inflation expectations': 'T10YIE',
+  '5y5y': 'T5YIFR',
+  'financial conditions': 'NFCI',
+  'yield curve': 'T10Y2Y',
+  '2s10s': 'T10Y2Y',
+  wti: 'DCOILWTICO',
+  oil: 'DCOILWTICO',
+  gasoline: 'GASREGW',
+  'sticky cpi': 'CORESTICKM159SFRBATL',
+  'balance sheet': 'WALCL',
+  'fed balance sheet': 'WALCL',
   unemployment: 'UNRATE',
   'unemployment rate': 'UNRATE',
   jobless: 'ICSA',
@@ -90,7 +110,7 @@ async function fetchMeta(seriesId: string, apiKey: string) {
 export const fredTool: Tool<Input, Output> = {
   name: 'macro_indicator',
   description:
-    'Get the latest official US macroeconomic figure (with the prior reading and change) from FRED — the St. Louis Fed database. Handles CPI/core CPI, PCE, unemployment, initial jobless claims, GDP, M2, Fed funds rate, and Treasury yields (2y/10y). Use for "what is the latest CPI", "unemployment rate", "10-year yield", etc. Accepts a friendly name or a raw FRED series ID.',
+    'Get the latest official US macroeconomic figure (with the prior reading and change) from FRED — the St. Louis Fed database. Handles CPI/core CPI/sticky CPI, PCE, unemployment, initial jobless claims, GDP, M2, Fed funds rate, the current fed funds TARGET RANGE ("target range upper"/"target range lower"), Treasury yields (2y/10y), the 10y real yield, breakeven and 5y5y inflation expectations, the 2s10s curve, financial conditions (NFCI), the Fed balance sheet, and WTI/gasoline. Use for "what is the latest CPI", "unemployment rate", "10-year yield", etc. Accepts a friendly name or a raw FRED series ID.',
   inputSchema: {
     type: 'object',
     properties: {
