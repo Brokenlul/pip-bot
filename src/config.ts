@@ -111,6 +111,14 @@ const Schema = z
     // it isn't @-mentioned (and billed) across every channel. Other servers are
     // unaffected. Set to the #ask-pip channel id.
     PIP_COMMUNITY_CHANNEL_ID: z.string().optional(),
+    // Comma-separated guild ids where Pip ignores the GUILD's own plan and
+    // gates each MEMBER on their own personal trial/subscription instead (user
+    // decision 2026-07-29, HAVELI: a comped/paid server must not mean every
+    // member rides free — each member still needs their own trial or personal
+    // plan). Same rule as a DM, just delivered DM-not-public like every other
+    // server-context block. Empty = no server uses this (the default, guild-
+    // level plan behavior).
+    PIP_PER_USER_BILLING_GUILDS: z.string().optional(),
   })
   .superRefine((cfg, ctx) => {
     // A lone Discord token or app id means the adapter can't start — flag it

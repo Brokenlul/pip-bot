@@ -688,12 +688,19 @@ export async function betaGate(msg: NormalizedMessage): Promise<GateDecision> {
     }
   }
 
+  // Per-user-billing servers (opt-in list, e.g. HAVELI): the guild's own plan
+  // is ignored entirely and each member is gated on their own personal trial/
+  // subscription instead — see PIP_PER_USER_BILLING_GUILDS in config.ts.
+  const perUserBilling = !isDM && csvSet(cfg.PIP_PER_USER_BILLING_GUILDS).has(msg.guildId);
+
   // 2b. Personal trial window (user decision 2026-07-07): 7 free days, then ONE
   //     extra week for tweeting about Pip, then paid. This governs PERSONAL (DM)
   //     access only — a Server Pro member must not be blocked in the server by
   //     their own lapsed personal trial (server access is the guild's plan, at
-  //     the cap stage below). The claim/merge runs in any context so a paid
-  //     grant under their @handle is always picked up.
+  //     the cap stage below) UNLESS the guild is on the per-user-billing list,
+  //     where a lapsed member is exactly what should block. The claim/merge
+  //     runs in any context so a paid grant under their @handle is always
+  //     picked up.
   if (accessLapsed(tester, now)) {
     const upgraded = await claimHandleRow(msg, tester);
     if (upgraded) tester = upgraded;
@@ -704,6 +711,10 @@ export async function betaGate(msg: NormalizedMessage): Promise<GateDecision> {
     // (fires in response to their message, never an outbound DM), and it's a
     // canned string with no model call, so repeats cost nothing.
     return blocked(`Your free week with Pip is up 🌱 To keep going, ${payLine()}`);
+  }
+  if (perUserBilling && accessLapsed(tester, now)) {
+    // Same lapse, but DM-not-public (serverBlock) since this fires in a server.
+    return serverBlock(userKey, now, `Your free trial with Pip is up 🌱 To keep using Pip here, ${payLine()}`);
   }
 
   // 3. Cooldown (in-memory) — kills spam bursts & accidental double-fires.
@@ -760,6 +771,16 @@ export async function betaGate(msg: NormalizedMessage): Promise<GateDecision> {
       const mySpend = mine.reduce((s, r) => s + Number(r.cost_usd), 0);
       if (mySpend >= cfg.BETA_USER_DAILY_SPEND_USD) {
         return blocked("You've used today's Pip budget, it resets at midnight UTC 🌱");
+      }
+    } else if (perUserBilling) {
+      // Per-user-billing server: skip the guild's own plan entirely — gate
+      // this member on their own personal plan instead, same rule as the DM
+      // branch above, just DM'd instead of posted publicly.
+      const block = await planBlock(personalPlan(tester), { user_id: msg.userId }, mine.length, false);
+      if (block) return serverBlock(userKey, now, block);
+      const mySpend = mine.reduce((s, r) => s + Number(r.cost_usd), 0);
+      if (mySpend >= cfg.BETA_USER_DAILY_SPEND_USD) {
+        return serverBlock(userKey, now, "You've used today's Pip budget, it resets at midnight UTC 🌱");
       }
     } else {
       // Server context. Every block here is DM-not-public (serverBlock): a
