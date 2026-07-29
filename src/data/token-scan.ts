@@ -4,6 +4,7 @@ import { makeCache, withRetry, fetchWithTimeout } from '../core/util.js';
 import { getConfig, solanaTrackerEnabled, zerionEnabled } from '../config.js';
 import { fetchZerionIntel, type ZerionAth, type ZerionWalletFlow } from './zerion.js';
 import { fetchBlockscoutSecurity, blockscoutHost, type BlockscoutSecurity } from './blockscout.js';
+import { fetchProjectFootprint, NOT_CHECKED, type ProjectFootprint } from './project-footprint.js';
 
 /**
  * Memecoin / degen "scan" tool — a Rick-style read on a contract address.
@@ -84,6 +85,10 @@ interface Output {
   bundles: Bundles | null;
   // Deployer / top-whale posture toward this token (Zerion) — is either dumping
   wallet_intel: { deployer: ZerionWalletFlow | null; whale: ZerionWalletFlow | null } | null;
+  // Off-chain footprint: what the project says it is (website/JSON-LD) + whether
+  // a linked GitHub really exists and is being pushed to. `checked:false` means
+  // we did not look — it is NOT evidence the project has no product.
+  project: ProjectFootprint;
 }
 
 interface Bundles {
@@ -507,7 +512,7 @@ const cache = makeCache<Output>(45_000);
 export const tokenScanTool: Tool<Input, Output> = {
   name: 'token_scan',
   description:
-    'Full degen/memecoin scan of a token by CONTRACT ADDRESS on Solana OR any major EVM chain (Ethereum, Base, BNB/BSC, Arbitrum, Polygon, …), plus newer app-chains (e.g. Robinhood Chain) via their block explorer. Returns market data (price, FDV, liquidity, 24h volume, age, buy/sell txns, socials) AND on-chain security: total holders, top-holder concentration, LP locked %, and risk flags — for Solana via RugCheck (insider %, network insiders, mint/freeze authority, metadata mutability), for EVM via GoPlus (honeypot, buy/sell tax, ownership renounced, mintable, closed-source, pausable, blacklist, reclaimable ownership). Also returns, when available: ATH + drawdown % (all-time high history, EVM + Solana), launch-bundle detection (Solana: % of supply bundled at launch and whether bundlers still hold), deployer/whale wallet posture (is the deployer or top holder distributing the token), and a smart-money block (most profitable traders by realized PnL, holding vs exited). Use this (not crypto_price / dex_token_lookup) whenever a user pastes a contract address — Solana pump.fun mint or an EVM 0x… launch — or asks "is this safe / bundled / a honeypot / who holds this / how far off its ATH".',
+    'Full degen/memecoin scan of a token by CONTRACT ADDRESS on Solana OR any major EVM chain (Ethereum, Base, BNB/BSC, Arbitrum, Polygon, …), plus newer app-chains (e.g. Robinhood Chain) via their block explorer. Returns market data (price, FDV, liquidity, 24h volume, age, buy/sell txns, socials) AND on-chain security: total holders, top-holder concentration, LP locked %, and risk flags — for Solana via RugCheck (insider %, network insiders, mint/freeze authority, metadata mutability), for EVM via GoPlus (honeypot, buy/sell tax, ownership renounced, mintable, closed-source, pausable, blacklist, reclaimable ownership). Also returns, when available: ATH + drawdown % (all-time high history, EVM + Solana), launch-bundle detection (Solana: % of supply bundled at launch and whether bundlers still hold), deployer/whale wallet posture (is the deployer or top holder distributing the token), and a smart-money block (most profitable traders by realized PnL, holding vs exited). ALSO returns a `project` block — the token OFF-CHAIN: its website read live (title, the project\'s own description of what it does, product category, publisher/team name, and any linked docs/Discord/Telegram/X), plus whether a linked GitHub actually exists and when it was last pushed to. This is how you tell a bare meme from a token with a real product behind it, and it is the ONLY source here that can answer "what does this thing actually do"; `project.checked:false` means the lookup did not run and is NEVER evidence that no product exists. Use this (not crypto_price / dex_token_lookup) whenever a user pastes a contract address — Solana pump.fun mint or an EVM 0x… launch — or asks "is this safe / bundled / a honeypot / who holds this / how far off its ATH".',
   inputSchema: {
     type: 'object',
     properties: {
@@ -577,9 +582,13 @@ export const tokenScanTool: Tool<Input, Output> = {
             dex?.pairCreatedAt != null
               ? Math.max(0, Math.round((Date.now() - dex.pairCreatedAt) / 3_600_000))
               : null;
-          const socials = [...(dex?.info?.websites ?? []), ...(dex?.info?.socials ?? [])]
+          const websiteUrls = (dex?.info?.websites ?? [])
             .map((s) => s.url)
             .filter((u): u is string => Boolean(u));
+          const socialUrls = (dex?.info?.socials ?? [])
+            .map((s) => s.url)
+            .filter((u): u is string => Boolean(u));
+          const socials = [...websiteUrls, ...socialUrls];
 
           // ATH/drawdown + deployer/whale posture (Zerion). Runs after security
           // so it can feed the deployer + top-whale addresses to wallet intel.
@@ -588,17 +597,27 @@ export const tokenScanTool: Tool<Input, Output> = {
             (isEvm ? gp?.result.creator_address ?? bs?.deployer : rc?.creator) ?? null;
           const whaleAddr =
             (isEvm ? firstNonPoolGoPlus(gp?.result) ?? bs?.top_holder : firstNonPoolRc(rc)) ?? null;
-          const zi = zerionEnabled()
-            ? await fetchZerionIntel(dex?.chainId ?? (isEvm ? null : 'solana'), address, {
-                currentPrice: dex ? Number(dex.priceUsd ?? '0') : null,
-                currentFdv: dex?.fdv ?? null,
-                deployerAddr,
-                whaleAddr,
-              }).catch((e) => {
-                console.warn(`[token_scan] zerion: ${(e as Error).message}`);
-                return { ath: null, deployer: null, whale: null };
-              })
-            : { ath: null, deployer: null, whale: null };
+          // Off-chain footprint runs in parallel with Zerion — it answers a
+          // different question ("is there a product behind this?") that the
+          // on-chain feeds structurally cannot, and skipping it is what let a
+          // real DeFi suite get reported as "no product, no roadmap".
+          const [zi, footprint] = await Promise.all([
+            zerionEnabled()
+              ? fetchZerionIntel(dex?.chainId ?? (isEvm ? null : 'solana'), address, {
+                  currentPrice: dex ? Number(dex.priceUsd ?? '0') : null,
+                  currentFdv: dex?.fdv ?? null,
+                  deployerAddr,
+                  whaleAddr,
+                }).catch((e) => {
+                  console.warn(`[token_scan] zerion: ${(e as Error).message}`);
+                  return { ath: null, deployer: null, whale: null };
+                })
+              : Promise.resolve({ ath: null, deployer: null, whale: null }),
+            fetchProjectFootprint(websiteUrls, socialUrls).catch((e) => {
+              console.warn(`[token_scan] footprint: ${(e as Error).message}`);
+              return NOT_CHECKED; // checked:false — "we didn't look", not "nothing there"
+            }),
+          ]);
 
           // Blockscout security → the shared chain-agnostic fields (EVM chains
           // GoPlus can't reach). Unverified source is surfaced as a warn risk.
@@ -652,6 +671,7 @@ export const tokenScanTool: Tool<Input, Output> = {
             ath: zi.ath,
             bundles,
             wallet_intel: zi.deployer || zi.whale ? { deployer: zi.deployer, whale: zi.whale } : null,
+            project: footprint,
           };
         }),
       `token_scan:${address}`,
