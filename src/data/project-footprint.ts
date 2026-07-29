@@ -202,6 +202,50 @@ function jsonLdBlocks(html: string): JsonLd[] {
   return out;
 }
 
+/**
+ * Visible page text, for when the <head> says nothing useful.
+ *
+ * Benchmarked 2026-07-29 across live token sites: only a genuinely-built
+ * project (StonkBrokers) shipped JSON-LD with a real description. Every meme
+ * site tested gave a title and a one-line meta description and nothing else
+ * ("Cat Wif Hat — $CWH" was the WHOLE description). Rich metadata proves a
+ * real project; thin metadata proves nothing either way, so on thin sites the
+ * mechanism, tokenomics and roadmap only exist in the body copy.
+ *
+ * Costs no extra request: the landing page HTML is already in hand.
+ */
+function extractBodyText(html: string, max = 1200): string | null {
+  const body = /<body[^>]*>([\s\S]*)<\/body>/i.exec(html)?.[1] ?? html;
+  const text = body
+    // Drop anything that isn't prose before stripping tags.
+    .replace(/<(script|style|noscript|svg|template|iframe)[^>]*>[\s\S]*?<\/\1>/gi, ' ')
+    .replace(/<!--[\s\S]*?-->/g, ' ')
+    // Keep block boundaries as spaces so words don't fuse together.
+    .replace(/<\/(p|div|section|li|h[1-6]|br|tr)>/gi, ' ')
+    .replace(/<[^>]+>/g, ' ');
+  const cleaned = decodeEntities(text)
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (cleaned.length < 40) return null; // JS-rendered shell with no server HTML
+  return cleaned.slice(0, max);
+}
+
+/**
+ * True when the <head> told us nothing about what the project DOES. Drives the
+ * escalation to body text + a docs hop, so a project that self-describes
+ * properly never pays for the deeper read.
+ */
+function isThin(w: {
+  claims: string | null;
+  category: string | null;
+  publisher: string | null;
+  description: string | null;
+}): boolean {
+  if (w.claims) return false;
+  if (w.category && w.publisher) return false;
+  return (w.description?.length ?? 0) < 120;
+}
+
 /** Links that indicate an actual product/team, keyed by kind. */
 const LINK_KINDS: { kind: keyof FootprintLinks; re: RegExp }[] = [
   { kind: 'github', re: /https?:\/\/(?:www\.)?github\.com\/[A-Za-z0-9_.-]+(?:\/[A-Za-z0-9_.-]+)?/i },
@@ -317,6 +361,14 @@ export interface WebsiteRead {
   category: string | null;
   publisher: string | null;
   links: FootprintLinks;
+  /**
+   * Visible landing-page copy, filled ONLY when the metadata was too thin to
+   * say what the project does. Raw marketing prose in the project's own words:
+   * treat it as a CLAIM, never as verified fact.
+   */
+  page_excerpt: string | null;
+  /** Same, one hop into the linked docs/whitepaper (where mechanics usually live). */
+  docs_excerpt: string | null;
 }
 
 export interface ProjectFootprint {
@@ -366,6 +418,8 @@ export async function fetchProjectFootprint(
           category: null,
           publisher: null,
           links: {},
+          page_excerpt: null,
+          docs_excerpt: null,
         };
       } else {
         const { html } = page;
@@ -389,7 +443,24 @@ export async function fetchProjectFootprint(
             clean(withDesc?.applicationCategory, 120) ?? clean(meta(html, 'category'), 120),
           publisher: clean(publisher, 120),
           links: extractLinks(html, sameAs),
+          page_excerpt: null,
+          docs_excerpt: null,
         };
+
+        // Escalate ONLY when the metadata didn't say what the project does.
+        // A project that self-describes properly never pays for this.
+        if (isThin(website)) {
+          website.page_excerpt = extractBodyText(html);
+          const docsUrl = website.links.docs;
+          if (docsUrl && remaining(deadline) > 1500) {
+            try {
+              const docs = await fetchPage(docsUrl, deadline);
+              if (docs?.html) website.docs_excerpt = extractBodyText(docs.html);
+            } catch (e) {
+              console.warn(`[footprint] docs ${docsUrl}: ${(e as Error).message}`);
+            }
+          }
+        }
       }
     } catch (e) {
       console.warn(`[footprint] website ${siteUrl}: ${(e as Error).message}`);
@@ -403,6 +474,8 @@ export async function fetchProjectFootprint(
         category: null,
         publisher: null,
         links: {},
+        page_excerpt: null,
+        docs_excerpt: null,
       };
     }
   }
