@@ -50,6 +50,54 @@ export function isSimpleAsk(text: string): boolean {
 }
 
 /**
+ * Depth classifier (2026-07-30) — a SEPARATE concern from isSimpleAsk above.
+ * isSimpleAsk decides whether it's safe to hand a question to a weaker MODEL
+ * (deliberately narrow: a calendar ask is excluded there because Haiku
+ * answers it wrong from memory, even though the ANSWER itself should still be
+ * short). This decides expected OUTPUT LENGTH regardless of model, so a chart
+ * or calendar ask belongs in 'simple' here even though it's excluded above.
+ *
+ * Output token count turned out to be the dominant cost/latency driver (a
+ * near-linear relationship: ~6s avg under 200 output tokens vs ~51s avg
+ * around 1900), so this feeds a per-tier max_tokens cap in agent.ts — a
+ * backstop for the "match depth to the ask" instruction already in the system
+ * prompt, which alone wasn't landing consistently (57% of turns ran
+ * 400-1000+ output tokens, most of which don't need to).
+ *
+ * Pure keyword/shape heuristic, no extra LLM call, no added latency.
+ */
+export type AskDepth = 'simple' | 'standard' | 'deep';
+
+// Shapes the system prompt's own SIMPLE-tier examples name explicitly: "BTC
+// daily timeframe", "chart ETH 4h", "when's FOMC?" — none of these are
+// PRICE_RE matches, so isSimpleAsk alone misses them. The calendar half also
+// covers a bare "when is the fomc" (no "next"), not just "next fomc meeting".
+const SIMPLE_SHAPE_RE =
+  /\b(chart|timeframe|when.{0,10}\b(fomc|fed|cpi|meeting|rate decision|release|print))\b/i;
+
+// A bare contract-address paste ("@pip <address>", or the address alone) is
+// ALWAYS a deep token_scan read per the system prompt, no keyword needed —
+// only the EVM shape (0x + 40 hex) is unambiguous enough to detect safely; a
+// Solana base58 address is too easily confused with other short strings to
+// match without false positives, so those fall through to 'standard' here
+// (the per-step tool-based escalation in agent.ts is what actually protects
+// them from truncation, not this regex).
+const EVM_ADDRESS_RE = /\b0x[0-9a-f]{40}\b/i;
+
+export function classifyDepth(text: string): AskDepth {
+  const t = text.trim();
+  if (!t) return 'standard';
+  if (EVM_ADDRESS_RE.test(t)) return 'deep';
+  // COMPLEX_RE already captures exactly the system prompt's DEEP-tier
+  // triggers (a scan, a thesis stress-test, why/what-next, narrative, etc.) —
+  // reusing it here, rather than inventing a second vocabulary, keeps the two
+  // classifiers from silently drifting apart over time.
+  if (COMPLEX_RE.test(t)) return 'deep';
+  if (t.length <= SIMPLE_MAX_LEN && (PRICE_RE.test(t) || SIMPLE_SHAPE_RE.test(t))) return 'simple';
+  return 'standard';
+}
+
+/**
  * Choose the model for this turn. Falls back to the strong model whenever
  * routing is disabled, context is present (image / active thread / reply), or
  * the ask isn't a clean simple intent.

@@ -56,7 +56,7 @@ import { referralLinkTool } from '../data/referral-tool.js';
 import { maybeClaimReferral } from './referral-claim.js';
 import { marketIntelTool, marketBackdrop } from '../data/companion.js';
 import { buildReply } from './formatter.js';
-import { pickAnswerModel } from './route.js';
+import { pickAnswerModel, classifyDepth } from './route.js';
 import {
   sanitizeInbound,
   fenceToolResult,
@@ -78,6 +78,15 @@ import {
 import { getProfile, refreshProfile } from '../memory/profile.js';
 
 const MAX_AGENT_STEPS = 8;
+
+// Tools whose answer is ALWAYS a deep, multi-section structured read per the
+// system prompt (a full token_scan, a backtest, a footprint/cluster read) —
+// once one of these has fired, the final answer needs the deep token budget
+// regardless of what classifyDepth guessed from the raw question text alone.
+// This is what protects e.g. a Solana contract-address paste (which the text
+// classifier can't safely detect — see EVM_ADDRESS_RE's comment in route.ts)
+// from getting truncated by the simple/standard caps.
+const DEEP_SIGNAL_TOOLS = new Set(['token_scan', 'historical_swings', 'footprint', 'render_footprint']);
 
 // How much recent conversation to thread back in for follow-up context.
 const THREAD_WINDOW_MINUTES = 45;
@@ -317,6 +326,7 @@ Tools you have (prefer them over training data). A trader is waiting on you, whe
 - crypto_price (CoinGecko) for listed spot prices, ALWAYS try this FIRST for any named coin/token, even one that sounds like a memecoin or a joke name. CoinGecko is editorially listed and ranked, so it's far more resistant to scam copycats than a raw DEX search. Only fall back to dex_token_lookup (DexScreener) when crypto_price comes back "unknown asset", a name search on DexScreener alone is thick with same-name impostor pairs (fake seeded liquidity, near-zero real volume) that CoinGecko simply doesn't list. Don't skip straight to dex_token_lookup just because a name sounds degen, check CoinGecko first every time.
 - equity_snapshot / equity_fundamentals / equity_earnings (Finnhub, may be unavailable if not configured) for LISTED STOCKS: snapshot = price/market cap/52w/P-E/P-S; fundamentals = revenue & EPS growth, margins, ROE, debt, valuation multiples; earnings = next earnings date, consensus EPS/revenue estimate, recent beat/miss history, and analyst recommendation split. Use these for any company/ticker question and to predict an upcoming print. ETFs go through equity_snapshot too, by ticker: SPY/QQQ (equity beta), IBIT/FBTC (spot BTC ETFs), GLD (gold), TLT (long duration), HYG (credit risk). Use snapshot for an ETF's price/level; do NOT use equity_fundamentals on an ETF, a fund has no revenue, margins or ROE and it returns empty. NEVER state an ETF's price or an ETF flow figure from memory. equity_snapshot's price is the REGULAR SESSION quote, it carries no pre/post-market field, so right after an earnings print or on an extended-hours question, that number will lag the actual tape. Say so plainly rather than presenting it as the current post-market price, and web_search for the extended-hours print if the question turns on it specifically.
 - A bare 2-5 letter ticker with no other context ("INFQ", "full analysis on RKLB") is genuinely ambiguous between a stock and a coin, don't assume crypto and stop there if it fails. Call crypto_price AND equity_snapshot IN PARALLEL on the first turn, don't try one, hit an unknown/garbage match, and give up or ask the user to spell out the company, that makes you look like you can't do the one thing (resolve a ticker) a trader expects instantly. Only reach for dex_token_lookup as a third step, and only if BOTH of those come back empty, since it's the noisiest source (same-name impostor pairs) and should never be the sole thing you tried.
+- NEVER silently swap in a different, unrelated asset because it's topical. The SKHX incident: "gm gm SKHX short" got answered with a full WTI crude / Hormuz / Fed read, oil was in the news that morning and "short" pattern-matched to it, while SKHX (a real, resolvable equity) was never looked up at all, not via crypto_price, not via equity_snapshot. The literal token the user named is the ONLY subject of the answer. If a message pairs an unfamiliar all-caps token with a directional/trade word ("short", "long", "puts", etc.), that is the ambiguous-ticker case above, resolve THAT token (crypto_price + equity_snapshot in parallel) before writing a single word, don't let some other asset's live news fill the gap left by not recognizing it. If both come back empty, say plainly you can't find that symbol and ask what it is, a "no match" is always better than a confident answer about the wrong thing.
 - commodity_fx_rates_spot for anything that is NOT crypto and NOT a single stock/ETF. Metals (gold, silver, platinum, palladium, copper), energy (oil/WTI, brent, natgas), ags (wheat, corn), FX (eurusd, usdjpy, gbpusd, audusd, nzdusd, usdcad, usdchf, usdcnh), indices (spx, ndx, dow, russell, dax, nikkei, ftse, hang seng, vix) and the 5y/10y/30y yield. Returns price, day change, day range and the 52-week range (so you can say where in its range price actually sits). This is the ONLY way you can know a gold or oil or DXY or index level, you have no usable memory of them, so call it rather than recalling, even when the asset is a side note in a crypto answer. Use the plain name ("dow", "nikkei"), not a bare ticker guess. If it rejects a name, it is telling you the asset needs a different tool, do NOT fall back to memory.
 - historical_swings for backtesting, real Binance candle history compressed to swing highs/lows per symbol (crypto only, matched to a *USDT pair), so you can check a trader's claim/framework against actual dates and prices instead of guessing. Use it any time someone asks you to backtest, verify a historical pattern, or "what happened last time X."
 - token_scan for a full degen/memecoin read when a user pastes a CONTRACT ADDRESS or mint (especially Solana pump.fun) or asks "is this safe / bundled / who holds this". It returns market data + on-chain security (holders, top-holder concentration, insider %, LP locked, mint/freeze authority, risk flags) AND, when available: an ath block (all-time high + drawdown %, EVM + Solana), a bundles block (Solana launch-bundle detection: how much of supply was bundled and whether bundlers still hold), wallet_intel (whether the deployer or top whale is distributing the token), and a smart_money block (the token's most profitable traders by realized PnL, how many still hold vs. exited, cohort realized PnL). Covers Solana and every major EVM chain, plus newer app-chains (e.g. Robinhood Chain), though the deeper security mechanics may be unavailable on the newest ones. Prefer it over dex_token_lookup whenever the input is an address.
@@ -457,13 +467,28 @@ export async function answer(msg: NormalizedMessage, opts: AnswerOptions = {}): 
   const allowWeb = opts.allowWeb !== false;
   const allowScan = opts.allowScan !== false;
   const degraded = opts.degraded === true;
-  const maxTokens = beta ? (degraded ? CAPS.perRequest.degradeMaxTokens : CAPS.perRequest.maxTokens) : 2048;
   // Clean + bound the raw input ALWAYS (not just under the beta gate): strips
   // invisible/control/bidi injection chars and caps length. The cap doubles as
   // cost-abuse protection; sanitizing beats a huge padded prompt reaching the
   // model or poisoning the cache key. Beta tightens the cap further.
   const inLen = beta ? CAPS.perUser.maxQuestionLen : MAX_INPUT_LEN;
   const questionText = sanitizeInbound(msg.text ?? '', inLen);
+
+  // Depth-tiered output budget (2026-07-30) — see classifyDepth's comment for
+  // why this exists. Degrade mode overrides the tier entirely (tightest cap,
+  // regardless of ask shape); otherwise simple/standard asks get a real
+  // ceiling well below the deep-tier 1500, cutting the heavy tail that was
+  // missing the P95 latency target.
+  const askDepth = classifyDepth(questionText);
+  const maxTokens = !beta
+    ? 2048
+    : degraded
+      ? CAPS.perRequest.degradeMaxTokens
+      : askDepth === 'simple'
+        ? CAPS.perRequest.simpleMaxTokens
+        : askDepth === 'standard'
+          ? CAPS.perRequest.standardMaxTokens
+          : CAPS.perRequest.maxTokens;
 
   // Log-only visibility on a jailbreak/exfiltration attempt in the incoming
   // question. Never blocks or changes the answer, the prompt rules and the
@@ -541,9 +566,14 @@ export async function answer(msg: NormalizedMessage, opts: AnswerOptions = {}): 
 
   // 1. Semantic cache check (M4). Skip when images are attached, the cache key
   // is text-only (embeddings don't see the chart), so a hit would serve a stale
-  // answer for a brand-new screenshot. Also skip mid-conversation and on reply
-  // turns: those depend on live context a canned cache hit would ignore.
-  if (isMemoryOn() && !hasImages && thread.length === 0 && !msg.replyToText) {
+  // answer for a brand-new screenshot. Also skip reply turns: an explicit reply
+  // to a specific message is a different context a canned match can't see.
+  // NOT gated on thread.length: that used to require 45+ min of silence in this
+  // guild, which is always OLDER than both this cache's TTL and the exact-match
+  // cache's TTL below, so neither could ever return a still-fresh row (0 hits
+  // across 873 logged messages). The similarity/hash match itself already
+  // protects against a differently-phrased follow-up matching by accident.
+  if (isMemoryOn() && !hasImages && !msg.replyToText) {
     const cached = await lookupCache(msg.guildId, msg.userId, questionText).catch(() => null);
     if (cached) {
       const ageMs = Date.now() - cached.cachedAt.getTime();
@@ -558,11 +588,11 @@ export async function answer(msg: NormalizedMessage, opts: AnswerOptions = {}): 
 
   // 1b. Free exact-match cache, byte-identical standalone questions within this
   // guild, served for a short TTL so a burst of the same question costs ~1 call.
-  // Skipped mid-thread (context-dependent) and on image turns. Guild-scoped, so
-  // it never serves one trader's answer to another across communities.
+  // Skipped on reply turns (context-dependent) and image turns. Guild-scoped, so
+  // it never serves one trader's answer to another across communities. Same
+  // thread.length reasoning as the semantic cache above applies here too.
   const qHash = questionHash(questionText);
-  const canExactCache =
-    !hasImages && thread.length === 0 && !msg.replyToText && Boolean(questionText.trim());
+  const canExactCache = !hasImages && !msg.replyToText && Boolean(questionText.trim());
   if (canExactCache) {
     const hit = await exactCacheGet(msg.guildId, qHash).catch(() => null);
     if (hit) {
@@ -580,6 +610,7 @@ export async function answer(msg: NormalizedMessage, opts: AnswerOptions = {}): 
         degraded,
         cacheHit: true,
         failed: false,
+        askDepth,
       }).catch(() => {});
       return buildReply({ body: hit.answer, sources: hit.sources });
     }
@@ -714,12 +745,22 @@ export async function answer(msg: NormalizedMessage, opts: AnswerOptions = {}): 
         });
       }
     }
+    // Escalate to the deep budget once a deep-signal tool has actually fired
+    // in a prior step — recomputed fresh each iteration since toolsUsed only
+    // grows. Degrade mode is excluded on purpose: it exists specifically to
+    // protect the daily spend cap once it's close, so it stays the tightest
+    // cap no matter which tool ran.
+    const stepMaxTokens =
+      !degraded && maxTokens < CAPS.perRequest.maxTokens && [...toolsUsed].some((n) => DEEP_SIGNAL_TOOLS.has(n))
+        ? CAPS.perRequest.maxTokens
+        : maxTokens;
+
     let resp: Anthropic.Messages.Message;
     try {
       resp = await getClient().messages.create(
         {
           model: answerModel,
-          max_tokens: maxTokens,
+          max_tokens: stepMaxTokens,
           // Consistency guardrail: the API default (1.0) makes the same question
           // sample visibly different reads/levels per server. Low-but-nonzero
           // keeps the voice alive while anchoring the analysis to the data.
@@ -947,6 +988,7 @@ export async function answer(msg: NormalizedMessage, opts: AnswerOptions = {}): 
     cacheHit: false,
     failed,
     errorDetail: failed ? (timedOut ? 'timeout' : apiErrorDetail) : undefined,
+    askDepth,
   }).catch(() => {});
 
   // 3b. Store a clean answer in the free exact-match cache (standalone Q only).

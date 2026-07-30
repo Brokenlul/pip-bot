@@ -5,10 +5,13 @@ import { NormalizedMessage } from '../adapters/platform.js';
 import {
   CAPS,
   PLAN_CAPS,
+  SUB_CAPS,
+  TRIAL_SUB_CAPS,
   TRIAL_PERSONAL,
   TRIAL_SERVER,
   TRIAL_DAYS,
   type PlanCaps,
+  type SubCaps,
 } from './caps.js';
 
 // ---- Cost model ($/1M tokens) ---------------------------------------------
@@ -76,6 +79,10 @@ export interface UsageLogRow {
   failed: boolean;
   /** Why a failed turn failed ("timeout" or "<kind>[:<status>][:<error_type>] <message>"), truncated to 500 chars. */
   errorDetail?: string;
+  /** 'simple' | 'standard' | 'deep' (src/core/route.ts classifyDepth) — lets the
+   *  admin dashboard track the cost/latency targets against simple/standard
+   *  traffic separately from genuinely deep reads that legitimately run long. */
+  askDepth?: string;
 }
 
 /** Fire-and-forget write of one request's usage + cost. Never throws. */
@@ -102,6 +109,7 @@ export async function logUsage(row: UsageLogRow): Promise<void> {
       cache_hit: row.cacheHit,
       failed: row.failed,
       error_detail: row.errorDetail ?? null,
+      ask_depth: row.askDepth ?? null,
     })
     .throwOnError();
 }
@@ -133,6 +141,32 @@ export async function logSafetyEvent(row: SafetyEventRow): Promise<void> {
       kind: row.kind,
       detail: row.detail ?? null,
       question_hash: row.questionHash ?? null,
+    })
+    .throwOnError();
+}
+
+export interface GateEventRow {
+  platform: string;
+  guildId: string;
+  userId: string;
+  gateType: string;
+  capValue?: number | null;
+}
+
+/** Fire-and-forget durable record of a betaGate block or feature-degrade firing.
+ *  Console logging (blockedSilent) stays for local dev; this makes cap-hits
+ *  queryable from Supabase as a willingness-to-pay signal. Never throws. */
+export async function logGateEvent(row: GateEventRow): Promise<void> {
+  const db = getDb();
+  if (!db) return;
+  await db
+    .from('gate_event')
+    .insert({
+      platform: row.platform,
+      guild_id: row.guildId,
+      user_id: row.userId,
+      gate_type: row.gateType,
+      cap_value: row.capValue ?? null,
     })
     .throwOnError();
 }
@@ -493,14 +527,20 @@ function payLine(): string {
 
 // ---- Plan resolution + enforcement (2026-07-24) ----------------------------
 
-/** The personal plan for a DM: an active personal subscription, else the trial. */
-function personalPlan(tester: TesterRow): PlanCaps {
+/** The personal plan for a DM: an active personal subscription, else the trial.
+ *  tierKey is null on trial — subCapsFor() below treats null as trial too. */
+function personalPlan(tester: TesterRow): { plan: PlanCaps; tierKey: string | null } {
   const tier = tester.tier ?? '';
   const active = tester.subscription_status === 'active';
   if (active && (tier === 'personal-lite' || tier === 'personal-pro' || tier === 'elite')) {
-    return PLAN_CAPS[tier]!;
+    return { plan: PLAN_CAPS[tier]!, tierKey: tier };
   }
-  return TRIAL_PERSONAL;
+  return { plan: TRIAL_PERSONAL, tierKey: null };
+}
+
+/** Resolve the per-day feature sub-caps for a tier key (null = trial). */
+function subCapsFor(tierKey: string | null): SubCaps {
+  return tierKey ? (SUB_CAPS[tierKey] ?? TRIAL_SUB_CAPS) : TRIAL_SUB_CAPS;
 }
 
 /**
@@ -509,52 +549,71 @@ function personalPlan(tester: TesterRow): PlanCaps {
  * 7-day trial (created_at + TRIAL_DAYS). `ok:false` means the guild's trial
  * lapsed with no paid plan — nudge them to Server Pro.
  */
-function guildAccess(gp: GuildPlan | null, now: number): { ok: boolean; plan: PlanCaps } {
+function guildAccess(gp: GuildPlan | null, now: number): { ok: boolean; plan: PlanCaps; tierKey: string | null } {
   const paidUntil = gp?.server_access_until ? new Date(gp.server_access_until).getTime() : 0;
   const tier = gp?.server_tier ?? '';
   if (paidUntil > now && (tier === 'server-pro' || tier === 'elite') && PLAN_CAPS[tier]) {
-    return { ok: true, plan: PLAN_CAPS[tier]! };
+    return { ok: true, plan: PLAN_CAPS[tier]!, tierKey: tier };
   }
   // Free guild trial from first-seen. Unknown created_at (older rows) fails OPEN
   // to trial caps rather than locking out an active server; the global +
   // per-guild spend caps still bound cost.
   const created = gp?.created_at ? new Date(gp.created_at).getTime() : null;
   const trialEnds = created != null ? created + TRIAL_DAYS * 86_400_000 : null;
-  if (trialEnds == null || now < trialEnds) return { ok: true, plan: TRIAL_SERVER };
-  return { ok: false, plan: TRIAL_SERVER };
+  if (trialEnds == null || now < trialEnds) return { ok: true, plan: TRIAL_SERVER, tierKey: null };
+  return { ok: false, plan: TRIAL_SERVER, tierKey: null };
+}
+
+interface PlanBlockResult {
+  text: string;
+  gateType: 'daily_cap' | 'monthly_cap' | 'trial_total';
+  capValue: number;
 }
 
 /**
  * Enforce a plan's message caps for a scope (a user in DMs, a guild in servers).
- * Returns a block message when a cap is hit, else null. Daily count is passed in
- * (already read from today's rows); monthly + trial-total are cheap COUNT hops
- * that only run when the plan actually has those caps.
+ * Returns a block (message + which cap fired, for gate_event) when a cap is
+ * hit, else null. Daily count is passed in (already read from today's rows);
+ * monthly + trial-total are cheap COUNT hops that only run when the plan
+ * actually has those caps.
  */
 async function planBlock(
   plan: PlanCaps,
   scope: { user_id: string } | { guild_id: string },
   todayCount: number,
   isServer: boolean,
-): Promise<string | null> {
+): Promise<PlanBlockResult | null> {
   if (todayCount >= plan.daily) {
-    return isServer
-      ? "This server's hit its daily Pip limit, resets at midnight UTC 🌱"
-      : "You've hit today's limit, it resets at midnight UTC 🌱";
+    return {
+      text: isServer
+        ? "This server's hit its daily Pip limit, resets at midnight UTC 🌱"
+        : "You've hit today's limit, it resets at midnight UTC 🌱",
+      gateType: 'daily_cap',
+      capValue: plan.daily,
+    };
   }
   if (plan.monthly != null) {
     const used = await usageCountForScope(scope, monthStartUtc().toISOString());
     if (used >= plan.monthly) {
-      return isServer
-        ? `This server has used its ${plan.label} monthly allowance (${plan.monthly}). Resets on the 1st, UTC 🌱`
-        : `You've used your ${plan.label} monthly allowance (${plan.monthly}). Resets on the 1st, UTC 🌱`;
+      return {
+        text: isServer
+          ? `This server has used its ${plan.label} monthly allowance (${plan.monthly}). Resets on the 1st, UTC 🌱`
+          : `You've used your ${plan.label} monthly allowance (${plan.monthly}). Resets on the 1st, UTC 🌱`,
+        gateType: 'monthly_cap',
+        capValue: plan.monthly,
+      };
     }
   }
   if (plan.trialTotal != null) {
     const used = await usageCountForScope(scope);
     if (used >= plan.trialTotal) {
-      return isServer
-        ? `This server's free trial is used up (${plan.trialTotal} messages). To keep Pip here, ${payLine()}`
-        : `Your free trial is used up (${plan.trialTotal} messages). To keep going, ${payLine()}`;
+      return {
+        text: isServer
+          ? `This server's free trial is used up (${plan.trialTotal} messages). To keep Pip here, ${payLine()}`
+          : `Your free trial is used up (${plan.trialTotal} messages). To keep going, ${payLine()}`,
+        gateType: 'trial_total',
+        capValue: plan.trialTotal,
+      };
     }
   }
   return null;
@@ -601,10 +660,21 @@ const DM_NUDGE_TTL_MS = 24 * 60 * 60 * 1000; // at most one server-block DM per 
  * the message silently otherwise. Keeps a hit-limit user from spamming the
  * server AND from being publicly pay-walled in front of everyone.
  */
-function serverBlock(userKey: string, now: number, text: string): GateDecision {
+function serverBlock(
+  msg: NormalizedMessage,
+  now: number,
+  text: string,
+  gateType: string,
+  capValue?: number,
+): GateDecision {
+  const userKey = `${msg.platform}:${msg.userId}`;
   const last = lastNudgeAt.get(userKey) ?? 0;
   const dmText = now - last >= DM_NUDGE_TTL_MS ? text : undefined;
   if (dmText) lastNudgeAt.set(userKey, now);
+  // Log every time the underlying condition fires, even on a day we suppress
+  // the repeat DM (dmText undefined) — the DM-nudge TTL bounds how often we
+  // NAG someone, not how often we count them hitting the cap.
+  logGate(msg, gateType, capValue);
   return { allow: false, silent: true, dmText, features: { web: false, vision: false, scan: false }, degraded: false };
 }
 
@@ -628,6 +698,8 @@ export async function betaGate(msg: NormalizedMessage): Promise<GateDecision> {
       return blocked(
         cfg.BETA_END_MESSAGE ??
           "Pip is paused for maintenance right now 🌱 Back shortly — thanks for your patience.",
+        msg,
+        'beta_paused',
       );
     }
   }
@@ -671,9 +743,13 @@ export async function betaGate(msg: NormalizedMessage): Promise<GateDecision> {
     const listCoversPlatform = [...guilds].some(
       (g) => g.startsWith('tg:') === msg.guildId.startsWith('tg:'),
     );
-    if (guilds.size && listCoversPlatform && !guilds.has(msg.guildId)) return blockedSilent('guild allowlist', msg);
+    if (guilds.size && listCoversPlatform && !guilds.has(msg.guildId)) {
+      return blockedSilent('guild allowlist', 'guild_allowlist', msg);
+    }
     const channels = csvSet(cfg.BETA_ALLOWED_CHANNELS);
-    if (channels.size && msg.channelId && !channels.has(msg.channelId)) return blockedSilent('channel allowlist', msg);
+    if (channels.size && msg.channelId && !channels.has(msg.channelId)) {
+      return blockedSilent('channel allowlist', 'channel_allowlist', msg);
+    }
     // Community server ONLY: confine Pip to #ask-pip so it isn't @-mentioned
     // (and billed) across every channel of a busy free community. Silent drop
     // elsewhere — no channel nag. Other servers are untouched.
@@ -684,7 +760,7 @@ export async function betaGate(msg: NormalizedMessage): Promise<GateDecision> {
       msg.channelId &&
       msg.channelId !== cfg.PIP_COMMUNITY_CHANNEL_ID
     ) {
-      return blockedSilent('community channel restriction', msg);
+      return blockedSilent('community channel restriction', 'community_channel', msg);
     }
   }
 
@@ -710,16 +786,23 @@ export async function betaGate(msg: NormalizedMessage): Promise<GateDecision> {
     // Pip should always get the expired notice — never silence. Reactive only
     // (fires in response to their message, never an outbound DM), and it's a
     // canned string with no model call, so repeats cost nothing.
-    return blocked(`Your free week with Pip is up 🌱 To keep going, ${payLine()}`);
+    return blocked(`Your free week with Pip is up 🌱 To keep going, ${payLine()}`, msg, 'personal_trial_lapsed');
   }
   if (perUserBilling && accessLapsed(tester, now)) {
     // Same lapse, but DM-not-public (serverBlock) since this fires in a server.
-    return serverBlock(userKey, now, `Your free trial with Pip is up 🌱 To keep using Pip here, ${payLine()}`);
+    return serverBlock(
+      msg,
+      now,
+      `Your free trial with Pip is up 🌱 To keep using Pip here, ${payLine()}`,
+      'personal_trial_lapsed',
+    );
   }
 
   // 3. Cooldown (in-memory) — kills spam bursts & accidental double-fires.
   const last = lastMessageAt.get(userKey) ?? 0;
-  if (now - last < CAPS.perUser.cooldownMs) return blockedSilent('cooldown', msg);
+  if (now - last < CAPS.perUser.cooldownMs) {
+    return blockedSilent('cooldown', 'cooldown', msg, CAPS.perUser.cooldownMs);
+  }
 
   // 4. Read today's spend/usage in one hop — feeds the global, per-guild, and
   //    per-user caps below.
@@ -731,7 +814,13 @@ export async function betaGate(msg: NormalizedMessage): Promise<GateDecision> {
 
   // 5. Global kill-switch — the real protection.
   if (globalSpend >= spendCap || globalMsgs >= cfg.BETA_DAILY_GLOBAL_MSGS) {
-    return blocked("Pip's daily budget is spent, back at midnight UTC. This keeps Pip running for everyone 🌱");
+    const overSpend = globalSpend >= spendCap;
+    return blocked(
+      "Pip's daily budget is spent, back at midnight UTC. This keeps Pip running for everyone 🌱",
+      msg,
+      overSpend ? 'global_spend_cap' : 'global_msg_cap',
+      overSpend ? spendCap : cfg.BETA_DAILY_GLOBAL_MSGS,
+    );
   }
 
   // 5b. Per-server spend cap — one busy guild can't drain the global budget.
@@ -743,9 +832,11 @@ export async function betaGate(msg: NormalizedMessage): Promise<GateDecision> {
     if (guildSpend >= cfg.BETA_GUILD_DAILY_SPEND_USD) {
       // DM-not-public, same as the other server-context blocks.
       return serverBlock(
-        userKey,
+        msg,
         now,
         "That server's daily Pip budget is spent for today, back at midnight UTC 🌱 DMs still work in the meantime.",
+        'guild_spend_cap',
+        cfg.BETA_GUILD_DAILY_SPEND_USD,
       );
     }
   }
@@ -759,35 +850,61 @@ export async function betaGate(msg: NormalizedMessage): Promise<GateDecision> {
   const isFounder = Boolean(cfg.FOUNDER_DISCORD_ID) && msg.userId === cfg.FOUNDER_DISCORD_ID;
   const mine = rows.filter((r) => r.user_id === msg.userId);
 
+  // Resolved by whichever branch below actually runs; null (trial sub-caps)
+  // for the founder path, where it's moot since features short-circuit on
+  // isFounder anyway.
+  let tierKey: string | null = null;
+
   if (!isFounder) {
     // Plan- and context-aware caps (2026-07-24). Personal plans are enforced
     // PER USER (DMs); server plans PER GUILD (shared). Each plan carries a daily
     // cap plus, where applicable, a monthly allowance and a hard trial total.
     if (isDM) {
-      const block = await planBlock(personalPlan(tester), { user_id: msg.userId }, mine.length, false);
-      if (block) return blocked(block);
+      const personal = personalPlan(tester);
+      tierKey = personal.tierKey;
+      const block = await planBlock(personal.plan, { user_id: msg.userId }, mine.length, false);
+      if (block) return blocked(block.text, msg, block.gateType, block.capValue);
       // Per-user daily SPEND backstop — bounds an expensive burst that stays
       // under the message count cap (the plan caps are message-count based).
       const mySpend = mine.reduce((s, r) => s + Number(r.cost_usd), 0);
       if (mySpend >= cfg.BETA_USER_DAILY_SPEND_USD) {
-        return blocked("You've used today's Pip budget, it resets at midnight UTC 🌱");
+        return blocked(
+          "You've used today's Pip budget, it resets at midnight UTC 🌱",
+          msg,
+          'user_spend_cap',
+          cfg.BETA_USER_DAILY_SPEND_USD,
+        );
       }
     } else if (perUserBilling) {
       // Per-user-billing server: skip the guild's own plan entirely — gate
       // this member on their own personal plan instead, same rule as the DM
       // branch above, just DM'd instead of posted publicly.
-      const block = await planBlock(personalPlan(tester), { user_id: msg.userId }, mine.length, false);
-      if (block) return serverBlock(userKey, now, block);
+      const personal = personalPlan(tester);
+      tierKey = personal.tierKey;
+      const block = await planBlock(personal.plan, { user_id: msg.userId }, mine.length, false);
+      if (block) return serverBlock(msg, now, block.text, block.gateType, block.capValue);
       const mySpend = mine.reduce((s, r) => s + Number(r.cost_usd), 0);
       if (mySpend >= cfg.BETA_USER_DAILY_SPEND_USD) {
-        return serverBlock(userKey, now, "You've used today's Pip budget, it resets at midnight UTC 🌱");
+        return serverBlock(
+          msg,
+          now,
+          "You've used today's Pip budget, it resets at midnight UTC 🌱",
+          'user_spend_cap',
+          cfg.BETA_USER_DAILY_SPEND_USD,
+        );
       }
     } else {
       // Server context. Every block here is DM-not-public (serverBlock): a
       // hit-limit user is never pay-walled in front of the whole server.
       const access = guildAccess(await getGuildPlan(msg.guildId), now);
+      tierKey = access.tierKey;
       if (!access.ok) {
-        return serverBlock(userKey, now, `Pip's free trial in that server is up 🌱 To keep Pip there, an admin can ${payLine()}`);
+        return serverBlock(
+          msg,
+          now,
+          `Pip's free trial in that server is up 🌱 To keep Pip there, an admin can ${payLine()}`,
+          'guild_trial_lapsed',
+        );
       }
       // No per-member sub-cap (removed 2026-07-27). It bought no cost
       // protection — the guild's own daily + total caps already bound the
@@ -799,15 +916,27 @@ export async function betaGate(msg: NormalizedMessage): Promise<GateDecision> {
       // allowance; that is the accepted trade.
       const guildToday = rows.filter((r) => r.guild_id === msg.guildId).length;
       const block = await planBlock(access.plan, { guild_id: msg.guildId }, guildToday, true);
-      if (block) return serverBlock(userKey, now, block);
+      if (block) return serverBlock(msg, now, block.text, block.gateType, block.capValue);
     }
   }
 
-  // Degrade mode + per-user feature budgets.
+  // Degrade mode + per-user feature budgets, tier-aware (2026-07-30 rebalance).
   const degraded = globalSpend >= spendCap * CAPS.degradeAtFraction;
+  const subCaps = subCapsFor(tierKey);
   const mySearches = mine.reduce((s, r) => s + (r.web_searches ?? 0), 0);
   const myVision = mine.filter((r) => r.had_vision).length;
   const myScans = mine.filter((r) => (r.tools_used ?? []).includes('token_scan')).length;
+
+  // Feature sub-cap hits are a SOFT degrade, not a block — allow stays true,
+  // only that one capability turns off, so these can't return early like the
+  // block points above. Logged as their own gate_type regardless of the
+  // separate `degraded` (approaching-global-cap) state: this is specifically
+  // "this user hit their tier's per-day count on this tool," a WTP signal.
+  if (!isFounder) {
+    if (mySearches >= subCaps.webSearches) logGate(msg, 'feature_web', subCaps.webSearches);
+    if (myVision >= subCaps.vision) logGate(msg, 'feature_vision', subCaps.vision);
+    if (myScans >= subCaps.scans) logGate(msg, 'feature_scan', subCaps.scans);
+  }
 
   lastMessageAt.set(userKey, now); // consume the cooldown slot on a served turn
   return {
@@ -815,19 +944,27 @@ export async function betaGate(msg: NormalizedMessage): Promise<GateDecision> {
     enrolled,
     degraded,
     features: {
-      web: isFounder || (!degraded && mySearches < CAPS.perUser.webSearches),
-      vision: isFounder || (!degraded && myVision < CAPS.perUser.vision),
-      scan: isFounder || myScans < CAPS.perUser.scans,
+      web: isFounder || (!degraded && mySearches < subCaps.webSearches),
+      vision: isFounder || (!degraded && myVision < subCaps.vision),
+      scan: isFounder || myScans < subCaps.scans,
     },
   };
 }
 
-function blocked(replyText: string): GateDecision {
+function logGate(msg: NormalizedMessage, gateType: string, capValue?: number): void {
+  void logGateEvent({ platform: msg.platform, guildId: msg.guildId, userId: msg.userId, gateType, capValue }).catch(
+    () => {},
+  );
+}
+
+function blocked(replyText: string, msg: NormalizedMessage, gateType: string, capValue?: number): GateDecision {
+  logGate(msg, gateType, capValue);
   return { allow: false, replyText, features: { web: false, vision: false, scan: false }, degraded: false };
 }
-function blockedSilent(reason: string, msg: NormalizedMessage): GateDecision {
+function blockedSilent(reason: string, gateType: string, msg: NormalizedMessage, capValue?: number): GateDecision {
   // Silent drops MUST leave a trace — an unlogged drop looks identical to an
   // outage from the user's side (took weeks to notice TG groups were blocked).
   console.log(`[beta] silent block (${reason}): ${msg.platform}:${msg.userId} in ${msg.guildId}`);
+  logGate(msg, gateType, capValue);
   return { allow: false, silent: true, features: { web: false, vision: false, scan: false }, degraded: false };
 }
