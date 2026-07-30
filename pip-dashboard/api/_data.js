@@ -23,7 +23,16 @@ const DAY = 864e5;
 
 async function loadUsage(days = 7) {
   const since = iso(Date.now() - days * DAY);
-  return sb(`usage_log?select=created_at,platform,user_id,guild_id,cost_usd,tools_used,had_vision,web_searches,degraded,cache_hit,latency_ms,failed,error_detail&created_at=gte.${since}&order=created_at.desc&limit=50000`);
+  return sb(`usage_log?select=created_at,platform,user_id,guild_id,cost_usd,tools_used,had_vision,web_searches,degraded,cache_hit,latency_ms,failed,error_detail,ask_depth&created_at=gte.${since}&order=created_at.desc&limit=50000`);
+}
+// Total spend for ONE user from an arbitrary point on, e.g. their current
+// billing-cycle start — loadUsage(days) loads every user's rows for a fixed
+// recent window, which is the wrong shape when what's needed is one user
+// going back to whenever their subscription last renewed (could be well
+// past 30d for a yearly plan). Filtered server-side so it stays cheap.
+async function loadUserSpendSince(userId, sinceIso) {
+  const rows = await sb(`usage_log?select=cost_usd&user_id=eq.${encodeURIComponent(userId)}&created_at=gte.${sinceIso}&limit=50000`);
+  return rows.reduce((s, r) => s + (Number(r.cost_usd) || 0), 0);
 }
 async function loadTesters() {
   return sb('beta_testers?select=platform,platform_id,name,invited_at,access_until,extension_used,extension_tweet_url,extension_claimed_at,tier,subscription_provider,subscription_id,subscription_status&limit=5000');
@@ -501,6 +510,24 @@ function overviewMetrics(rows, testers, feedback, caps, founderKeys) {
   const costPerMsg = tRows.length ? sum(tRows, (r) => r.cost_usd) / tRows.length : null;
   const p95Latency = p95(nonHit.map((r) => Number(r.latency_ms) || 0).filter((x) => x > 0));
 
+  // 2026-07-30: the <10s/$0.06 targets are tracked against simple+standard
+  // traffic only (src/core/route.ts classifyDepth) — a genuinely deep read (a
+  // scan, a thesis stress-test) legitimately runs longer, and blending it into
+  // one number either hides a real simple/standard regression or unfairly
+  // dings a deep answer for being thorough. Rows written before this shipped
+  // have ask_depth null and are excluded from both tiers below (can't classify
+  // them after the fact), so this fills in as new traffic accumulates.
+  const shallowRows = tRows.filter((r) => r.ask_depth === 'simple' || r.ask_depth === 'standard');
+  const deepRows = tRows.filter((r) => r.ask_depth === 'deep');
+  const costPerMsgShallow = shallowRows.length ? sum(shallowRows, (r) => r.cost_usd) / shallowRows.length : null;
+  const p95LatencyShallow = p95(
+    shallowRows.filter((r) => !r.cache_hit).map((r) => Number(r.latency_ms) || 0).filter((x) => x > 0),
+  );
+  const costPerMsgDeep = deepRows.length ? sum(deepRows, (r) => r.cost_usd) / deepRows.length : null;
+  const p95LatencyDeep = p95(
+    deepRows.filter((r) => !r.cache_hit).map((r) => Number(r.latency_ms) || 0).filter((x) => x > 0),
+  );
+
   const weekSpend = sum(rows, (r) => r.cost_usd);
   const cacheHits = rows.filter((r) => r.cache_hit).length;
   const days = [];
@@ -525,14 +552,22 @@ function overviewMetrics(rows, testers, feedback, caps, founderKeys) {
       ['Retention', 'Day-7 return', day7 == null ? '—' : `${Math.round(day7 * 100)}%`, day7 != null && day7 >= 0.5, '≥50%'],
       ['Quality', '👍 / 👎 ratio', quality == null ? '— (no votes)' : `${Math.round(quality * 100)}%`, quality != null && quality >= 0.8, '≥80%'],
       ['Quality', 'Failed rate', failedRate == null ? '—' : `${Math.round(failedRate * 100)}%`, failedRate != null && failedRate < 0.1, '<10%'],
-      ['Ops', 'Cost / message', costPerMsg == null ? '—' : `$${costPerMsg.toFixed(4)}`, costPerMsg != null && costPerMsg <= 0.06, '≤$0.06'],
-      ['Ops', 'p95 latency', p95Latency == null ? '—' : `${(p95Latency / 1000).toFixed(1)}s`, p95Latency != null && p95Latency < 10000, '<10s'],
+      // Scoped to simple+standard traffic (see comment above costPerMsgShallow) —
+      // this is what the <10s/$0.06 targets actually track now.
+      ['Ops', 'Cost / message', costPerMsgShallow == null ? '—' : `$${costPerMsgShallow.toFixed(4)}`, costPerMsgShallow != null && costPerMsgShallow <= 0.06, '≤$0.06'],
+      ['Ops', 'p95 latency', p95LatencyShallow == null ? '—' : `${(p95LatencyShallow / 1000).toFixed(1)}s`, p95LatencyShallow != null && p95LatencyShallow < 10000, '<10s'],
+      // Deep reads (a scan, a thesis stress-test) tracked separately, informational only — no target, they're expected to run longer.
+      ['Ops', 'Cost / message (deep)', costPerMsgDeep == null ? '—' : `$${costPerMsgDeep.toFixed(4)}`, null, 'informational'],
+      ['Ops', 'p95 latency (deep)', p95LatencyDeep == null ? '—' : `${(p95LatencyDeep / 1000).toFixed(1)}s`, null, 'informational'],
+      // Unscoped blend, kept for continuity with history predating the split.
+      ['Ops', 'Cost / message (blended)', costPerMsg == null ? '—' : `$${costPerMsg.toFixed(4)}`, null, 'informational'],
+      ['Ops', 'p95 latency (blended)', p95Latency == null ? '—' : `${(p95Latency / 1000).toFixed(1)}s`, null, 'informational'],
     ],
   };
 }
 
 module.exports = {
-  sb, loadUsage, loadTesters, loadFeedback, loadSafetyEvents, loadSiteEvents, loadGuilds, loadActivity, loadUserConversations, loadUserProfile,
+  sb, loadUsage, loadUserSpendSince, loadTesters, loadFeedback, loadSafetyEvents, loadSiteEvents, loadGuilds, loadActivity, loadUserConversations, loadUserProfile,
   loadGuildLabels, saveGuildLabel, loadHeartbeat, loadSentimentEvents, loadConversationsByMessageIds,
   loadAttribution, loadLabels, saveLabels, setAccess,
   loadReferrals, loadReferralPayouts, markPayoutPaid,

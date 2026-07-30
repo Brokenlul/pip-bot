@@ -161,8 +161,8 @@ header{display:flex;align-items:baseline;justify-content:space-between;gap:12px;
 .muted{color:var(--sage)}.clay,.bad{color:var(--clay)}.ok{color:var(--green)}.gold{color:var(--gold)}
 .eyebrow{font:12px/1 ui-monospace,SFMono-Regular,Menlo,monospace;text-transform:uppercase;letter-spacing:.08em;color:var(--sage);margin-bottom:12px}
 .card{background:var(--paper);border:1px solid var(--hair);border-radius:16px;padding:18px 20px;box-shadow:0 1px 2px rgba(14,59,38,.05),0 8px 24px rgba(14,59,38,.04);margin-bottom:14px;overflow-x:auto}
-.grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}.grid4{display:grid;grid-template-columns:repeat(4,1fr);gap:14px}.grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
-.grid3 .card,.grid4 .card,.grid2 .card{margin-bottom:0}
+.grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}.grid4{display:grid;grid-template-columns:repeat(4,1fr);gap:14px}.grid5{display:grid;grid-template-columns:repeat(5,1fr);gap:14px}.grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+.grid3 .card,.grid4 .card,.grid5 .card,.grid2 .card{margin-bottom:0}
 .stat .big,.big{font-size:28px;font-weight:600;color:var(--ink);letter-spacing:-.02em}
 .meter{height:8px;background:var(--hair);border-radius:99px;overflow:hidden;margin:12px 0 8px}.fill{height:100%;border-radius:99px}
 .chart{display:flex;align-items:flex-end;gap:10px;height:150px;padding-top:8px}.col{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:flex-end;gap:6px}
@@ -190,7 +190,7 @@ select.s-hot{color:var(--clay);border-color:var(--clay)}
 select.s-extended{color:var(--sage);border-color:var(--sage)}
 select.s-revenue{color:var(--green);border-color:var(--green)}
 .trunc{max-width:400px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-@media(max-width:820px){.grid3,.grid4,.grid2{grid-template-columns:1fr 1fr}.trunc{max-width:220px}}@media(max-width:520px){.grid3,.grid4,.grid2{grid-template-columns:1fr}}
+@media(max-width:820px){.grid3,.grid4,.grid5,.grid2{grid-template-columns:1fr 1fr}.trunc{max-width:220px}}@media(max-width:520px){.grid3,.grid4,.grid5,.grid2{grid-template-columns:1fr}}
 `;
 
 module.exports = {

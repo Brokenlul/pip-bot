@@ -272,8 +272,12 @@ async function viewOverview() {
   const body = `
     <div class="grid3">
       ${meter('Spend today', spendFrac, usd(m.todaySpend))}
-      ${stat('Cost / message', opsValue('Cost / message'), '7d avg · target ≤$0.06')}
-      ${stat('p95 latency', opsValue('p95 latency'), '7d · target <10s')}
+      ${stat('Cost / message', opsValue('Cost / message'), 'simple+standard · 7d avg · target ≤$0.06')}
+      ${stat('p95 latency', opsValue('p95 latency'), 'simple+standard · 7d · target <10s')}
+    </div>
+    <div class="grid2">
+      ${stat('Cost / message (deep)', opsValue('Cost / message (deep)'), 'scans, thesis stress-tests · 7d avg · informational, no target')}
+      ${stat('p95 latency (deep)', opsValue('p95 latency (deep)'), 'scans, thesis stress-tests · 7d · informational, no target')}
     </div>
     ${card(`Users onboarded · last ${OVERVIEW_CHART_DAYS} days · today ${onboardSeries[onboardSeries.length - 1].n}`, lineChart(onboardSeries, maxOnboard, 'onboarded'))}
     ${card(`Messages · last ${OVERVIEW_CHART_DAYS} days · today ${messageSeries[messageSeries.length - 1].n}`, lineChart(messageSeries, maxMessages, 'messages'))}`;
@@ -882,12 +886,27 @@ async function viewUserDetail(id) {
   const mine = rows.filter((r) => r.user_id === id);
   const spend = mine.reduce((s, r) => s + (Number(r.cost_usd) || 0), 0);
   const state = t ? D.classify(t, now) : 'unknown';
+
+  // For a paid, active subscriber: what has serving them cost SINCE they last
+  // paid, not just the fixed 30d window above (a yearly plan's cycle is
+  // longer than that). access_until IS the last successful charge plus one
+  // cycle, so access_until minus the cycle length is that charge's date, no
+  // guessing or matching against provider records required.
+  let paidSince = null;
+  if (state === 'paid' && t.access_until && Number.isFinite(new Date(t.access_until).getTime())) {
+    const cycleDays = D.inferBilling(t) === 'yearly' ? 365 : 30;
+    const periodStartMs = new Date(t.access_until).getTime() - cycleDays * D.DAY;
+    const sinceIso = new Date(periodStartMs).toISOString();
+    const spendSincePayment = await D.loadUserSpendSince(id, sinceIso).catch(() => null);
+    paidSince = { at: periodStartMs, spend: spendSincePayment };
+  }
+
   const header = `<div class="card"><div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
       <div class="big">${esc(t ? t.name || t.platform_id : shortId(id))}</div>
       ${t ? subTag(state) : ''}
       <span class="mono muted">${esc(id)}</span>
       <span class="spacer" style="flex:1"></span><a class="rowlink" href="/users">← all users</a></div></div>`;
-  const info = `<div class="grid4">
+  const info = `<div class="${paidSince ? 'grid5' : 'grid4'}">
       ${stat('State', t ? state : 'not a tester')}
       ${stat('Spend · 30d', usd(spend))}
       ${stat('Messages · 30d', String(mine.length))}
@@ -898,6 +917,11 @@ async function viewUserDetail(id) {
           ? `until ${ymd(t.access_until)}${t.subscription_provider ? ` · ${t.subscription_provider} · ${(D.TIER[t.tier] || {}).label || t.tier || ''}` : ''}`
           : (t && t.subscription_provider ? `${t.subscription_provider} · ${(D.TIER[t.tier] || {}).label || t.tier || ''}` : ''),
       )}
+      ${paidSince ? stat(
+        'Spend since last payment',
+        paidSince.spend == null ? '—' : usd(paidSince.spend),
+        `since ~${ymd(new Date(paidSince.at).toISOString())} (inferred billing-cycle start)`,
+      ) : ''}
     </div>`;
   const profileHtml = profiles.length
     ? profiles.map((p) => `<div style="margin-bottom:10px"><div class="muted mono" style="font-size:12px">${esc(String(p.guild_id))} · ${ago(p.updated_at)}</div><div>${esc(p.profile)}</div></div>`).join('')
