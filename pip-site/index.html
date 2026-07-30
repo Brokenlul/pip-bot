@@ -87,6 +87,23 @@
   .feature-card:hover { box-shadow: 0 16px 40px -16px rgba(18,161,90,0.25); transform: translateY(-2px); }
   .demo-card { border-radius: 16px; padding: 26px; display: flex; flex-direction: column; gap: 18px; transition: box-shadow 220ms ease-out; }
   .demo-card:hover { box-shadow: 0 16px 40px -16px rgba(18,161,90,0.25); }
+
+  /* Testimonial marquee: two rows, opposite directions, each track duplicated
+     so translateX(-50%) loops seamlessly. Global prefers-reduced-motion rule
+     above already freezes this like every other animation on the page. */
+  .testimonial-wall { -webkit-mask-image: linear-gradient(90deg, transparent, #000 6%, #000 94%, transparent); mask-image: linear-gradient(90deg, transparent, #000 6%, #000 94%, transparent); }
+  .testimonial-row { overflow: hidden; }
+  .testimonial-track { display: flex; gap: 16px; width: max-content; animation: marqueeLeft 50s linear infinite; }
+  .testimonial-track.reverse { animation-name: marqueeRight; animation-duration: 56s; }
+  .testimonial-row:hover .testimonial-track { animation-play-state: paused; }
+  @keyframes marqueeLeft { from { transform: translateX(0); } to { transform: translateX(-50%); } }
+  @keyframes marqueeRight { from { transform: translateX(-50%); } to { transform: translateX(0); } }
+  .testimonial-card { flex: none; width: 340px; background: #FFFFFF; border: 1px solid var(--border); border-radius: 16px; padding: 20px; display: flex; flex-direction: column; gap: 14px; text-decoration: none; color: inherit; transition: box-shadow 220ms ease-out, transform 220ms ease-out; }
+  .testimonial-card:hover { box-shadow: 0 16px 40px -16px rgba(18,161,90,0.25); transform: translateY(-2px); }
+  .testimonial-top { display: flex; align-items: flex-start; gap: 12px; }
+  .testimonial-avatar { position: relative; width: 34px; height: 34px; border-radius: 50%; background: var(--forest); color: var(--mint); font-weight: 600; font-size: 13px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; overflow: hidden; }
+  .testimonial-avatar img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+  @media (max-width: 640px) { .testimonial-card { width: 272px !important; } }
   .footer-link { color: rgba(242,247,238,0.5); text-decoration: none; }
   .footer-link:hover { color: var(--mint); }
   .plans-link { font-family: 'Geist Mono', ui-monospace, monospace; font-size: 13px; color: var(--green); text-decoration: none; }
@@ -373,6 +390,162 @@
         </div>
 
       </div>
+    </div>
+  </section>
+
+  <!-- ============ WHAT PEOPLE SAY ============ -->
+  <section class="pad-x" style="padding: 0 32px 140px;">
+    <div style="max-width: 1120px; margin: 0 auto; display: flex; align-items: baseline; justify-content: space-between; gap: 16px; flex-wrap: wrap;">
+      <div class="mono" style="font-size: 13px; letter-spacing: 0.14em; color: var(--green);">⟩ WHAT PEOPLE SAY</div>
+      <a href="https://x.com/search?q=%40Pipinvestbot&f=live" target="_blank" rel="noopener" class="mono" style="font-size: 13px; color: var(--muted); text-decoration: none; display: inline-flex; align-items: center; gap: 6px;">View all <span aria-hidden="true">→</span></a>
+    </div>
+
+    <div class="testimonial-wall" style="margin-top: 36px; display: flex; flex-direction: column; gap: 16px;">
+
+      <!-- row 1 (scrolls left), 4 cards + the same 4 repeated for a seamless loop -->
+      <div class="testimonial-row">
+        <div class="testimonial-track">
+
+          <a class="testimonial-card" href="https://x.com/Aarjun1x/status/2082445417732874326" target="_blank" rel="noopener">
+            <div class="testimonial-top">
+              <span class="testimonial-avatar">A<img src="https://unavatar.io/x/Aarjun1x" alt="" loading="lazy" onerror="this.remove()"></span>
+              <p style="margin: 0; font-size: 14.5px; line-height: 1.55;">"tped longs on btc, thanks to @Pipinvestbot for making it easier"</p>
+            </div>
+            <div class="mono" style="font-size: 12.5px; color: var(--green);">@Aarjun1x</div>
+          </a>
+
+          <a class="testimonial-card" href="https://x.com/SolguruNFT/status/2082154307533824493" target="_blank" rel="noopener">
+            <div class="testimonial-top">
+              <span class="testimonial-avatar">S<img src="https://unavatar.io/x/SolguruNFT" alt="" loading="lazy" onerror="this.remove()"></span>
+              <p style="margin: 0; font-size: 14.5px; line-height: 1.55;">"Shoutout to @BrokenLull for building @Pipinvestbot. It's a go to tool for market research. Everything I need in one place…"</p>
+            </div>
+            <div class="mono" style="font-size: 12.5px; color: var(--green);">@SolguruNFT</div>
+          </a>
+
+          <a class="testimonial-card" href="https://x.com/tomes__s/status/2082073569035444572" target="_blank" rel="noopener">
+            <div class="testimonial-top">
+              <span class="testimonial-avatar">T<img src="https://unavatar.io/x/tomes__s" alt="" loading="lazy" onerror="this.remove()"></span>
+              <p style="margin: 0; font-size: 14.5px; line-height: 1.55;">"Trying @Pipinvestbot from @BrokenLull… Pip bot has advantage of better understanding of markets using also psychology, geopolitics and smart money/whales analysis"</p>
+            </div>
+            <div class="mono" style="font-size: 12.5px; color: var(--green);">@tomes__s</div>
+          </a>
+
+          <a class="testimonial-card" href="https://x.com/AwMono/status/2081023564921413676" target="_blank" rel="noopener">
+            <div class="testimonial-top">
+              <span class="testimonial-avatar">A<img src="https://unavatar.io/x/AwMono" alt="" loading="lazy" onerror="this.remove()"></span>
+              <p style="margin: 0; font-size: 14.5px; line-height: 1.55;">"Research smarter, not longer! Are you a trader? If yes, @Pipinvestbot is the only analyst you need right now…"</p>
+            </div>
+            <div class="mono" style="font-size: 12.5px; color: var(--green);">@AwMono</div>
+          </a>
+
+          <!-- repeat for the loop -->
+          <a class="testimonial-card" href="https://x.com/Aarjun1x/status/2082445417732874326" target="_blank" rel="noopener" aria-hidden="true" tabindex="-1">
+            <div class="testimonial-top">
+              <span class="testimonial-avatar">A<img src="https://unavatar.io/x/Aarjun1x" alt="" loading="lazy" onerror="this.remove()"></span>
+              <p style="margin: 0; font-size: 14.5px; line-height: 1.55;">"tped longs on btc, thanks to @Pipinvestbot for making it easier"</p>
+            </div>
+            <div class="mono" style="font-size: 12.5px; color: var(--green);">@Aarjun1x</div>
+          </a>
+
+          <a class="testimonial-card" href="https://x.com/SolguruNFT/status/2082154307533824493" target="_blank" rel="noopener" aria-hidden="true" tabindex="-1">
+            <div class="testimonial-top">
+              <span class="testimonial-avatar">S<img src="https://unavatar.io/x/SolguruNFT" alt="" loading="lazy" onerror="this.remove()"></span>
+              <p style="margin: 0; font-size: 14.5px; line-height: 1.55;">"Shoutout to @BrokenLull for building @Pipinvestbot. It's a go to tool for market research. Everything I need in one place…"</p>
+            </div>
+            <div class="mono" style="font-size: 12.5px; color: var(--green);">@SolguruNFT</div>
+          </a>
+
+          <a class="testimonial-card" href="https://x.com/tomes__s/status/2082073569035444572" target="_blank" rel="noopener" aria-hidden="true" tabindex="-1">
+            <div class="testimonial-top">
+              <span class="testimonial-avatar">T<img src="https://unavatar.io/x/tomes__s" alt="" loading="lazy" onerror="this.remove()"></span>
+              <p style="margin: 0; font-size: 14.5px; line-height: 1.55;">"Trying @Pipinvestbot from @BrokenLull… Pip bot has advantage of better understanding of markets using also psychology, geopolitics and smart money/whales analysis"</p>
+            </div>
+            <div class="mono" style="font-size: 12.5px; color: var(--green);">@tomes__s</div>
+          </a>
+
+          <a class="testimonial-card" href="https://x.com/AwMono/status/2081023564921413676" target="_blank" rel="noopener" aria-hidden="true" tabindex="-1">
+            <div class="testimonial-top">
+              <span class="testimonial-avatar">A<img src="https://unavatar.io/x/AwMono" alt="" loading="lazy" onerror="this.remove()"></span>
+              <p style="margin: 0; font-size: 14.5px; line-height: 1.55;">"Research smarter, not longer! Are you a trader? If yes, @Pipinvestbot is the only analyst you need right now…"</p>
+            </div>
+            <div class="mono" style="font-size: 12.5px; color: var(--green);">@AwMono</div>
+          </a>
+
+        </div>
+      </div>
+
+      <!-- row 2 (scrolls right), 4 cards + the same 4 repeated -->
+      <div class="testimonial-row">
+        <div class="testimonial-track reverse">
+
+          <a class="testimonial-card" href="https://x.com/sableftw/status/2079082019833938354" target="_blank" rel="noopener">
+            <div class="testimonial-top">
+              <span class="testimonial-avatar">S<img src="https://unavatar.io/x/sableftw" alt="" loading="lazy" onerror="this.remove()"></span>
+              <p style="margin: 0; font-size: 14.5px; line-height: 1.55;">"Been using @Pipinvestbot by my goat @BrokenLull for a little while now"</p>
+            </div>
+            <div class="mono" style="font-size: 12.5px; color: var(--green);">@sableftw</div>
+          </a>
+
+          <a class="testimonial-card" href="https://x.com/Nirmaldarji16/status/2078120658400383323" target="_blank" rel="noopener">
+            <div class="testimonial-top">
+              <span class="testimonial-avatar">N<img src="https://unavatar.io/x/Nirmaldarji16" alt="" loading="lazy" onerror="this.remove()"></span>
+              <p style="margin: 0; font-size: 14.5px; line-height: 1.55;">"Just shared my own chart analysis with @Pipinvestbot and it didn't just agree/disagree. It broke down the key levels, explained the most likely scenario, pointed out what invalidates it…"</p>
+            </div>
+            <div class="mono" style="font-size: 12.5px; color: var(--green);">@Nirmaldarji16</div>
+          </a>
+
+          <a class="testimonial-card" href="https://x.com/scalplord101/status/2078026017059598411" target="_blank" rel="noopener">
+            <div class="testimonial-top">
+              <span class="testimonial-avatar">S<img src="https://unavatar.io/x/scalplord101" alt="" loading="lazy" onerror="this.remove()"></span>
+              <p style="margin: 0; font-size: 14.5px; line-height: 1.55;">"@Pipinvestbot is perhaps one of the best risk-mitigation tools i know of. @BrokenLull has done an incredible job creating an absolute beast that can save you truckloads with a wrong trade."</p>
+            </div>
+            <div class="mono" style="font-size: 12.5px; color: var(--green);">@scalplord101</div>
+          </a>
+
+          <a class="testimonial-card" href="https://x.com/otaku_1996sol/status/2074545264204099716" target="_blank" rel="noopener">
+            <div class="testimonial-top">
+              <span class="testimonial-avatar">O<img src="https://unavatar.io/x/otaku_1996sol" alt="" loading="lazy" onerror="this.remove()"></span>
+              <p style="margin: 0; font-size: 14.5px; line-height: 1.55;">"Got the data needed in 10 secs, @Pipinvestbot digging onchain like a knife going thro butter. Leagues ahead of any other data bots used in discords, lmfao!"</p>
+            </div>
+            <div class="mono" style="font-size: 12.5px; color: var(--green);">@otaku_1996sol</div>
+          </a>
+
+          <!-- repeat for the loop -->
+          <a class="testimonial-card" href="https://x.com/sableftw/status/2079082019833938354" target="_blank" rel="noopener" aria-hidden="true" tabindex="-1">
+            <div class="testimonial-top">
+              <span class="testimonial-avatar">S<img src="https://unavatar.io/x/sableftw" alt="" loading="lazy" onerror="this.remove()"></span>
+              <p style="margin: 0; font-size: 14.5px; line-height: 1.55;">"Been using @Pipinvestbot by my goat @BrokenLull for a little while now"</p>
+            </div>
+            <div class="mono" style="font-size: 12.5px; color: var(--green);">@sableftw</div>
+          </a>
+
+          <a class="testimonial-card" href="https://x.com/Nirmaldarji16/status/2078120658400383323" target="_blank" rel="noopener" aria-hidden="true" tabindex="-1">
+            <div class="testimonial-top">
+              <span class="testimonial-avatar">N<img src="https://unavatar.io/x/Nirmaldarji16" alt="" loading="lazy" onerror="this.remove()"></span>
+              <p style="margin: 0; font-size: 14.5px; line-height: 1.55;">"Just shared my own chart analysis with @Pipinvestbot and it didn't just agree/disagree. It broke down the key levels, explained the most likely scenario, pointed out what invalidates it…"</p>
+            </div>
+            <div class="mono" style="font-size: 12.5px; color: var(--green);">@Nirmaldarji16</div>
+          </a>
+
+          <a class="testimonial-card" href="https://x.com/scalplord101/status/2078026017059598411" target="_blank" rel="noopener" aria-hidden="true" tabindex="-1">
+            <div class="testimonial-top">
+              <span class="testimonial-avatar">S<img src="https://unavatar.io/x/scalplord101" alt="" loading="lazy" onerror="this.remove()"></span>
+              <p style="margin: 0; font-size: 14.5px; line-height: 1.55;">"@Pipinvestbot is perhaps one of the best risk-mitigation tools i know of. @BrokenLull has done an incredible job creating an absolute beast that can save you truckloads with a wrong trade."</p>
+            </div>
+            <div class="mono" style="font-size: 12.5px; color: var(--green);">@scalplord101</div>
+          </a>
+
+          <a class="testimonial-card" href="https://x.com/otaku_1996sol/status/2074545264204099716" target="_blank" rel="noopener" aria-hidden="true" tabindex="-1">
+            <div class="testimonial-top">
+              <span class="testimonial-avatar">O<img src="https://unavatar.io/x/otaku_1996sol" alt="" loading="lazy" onerror="this.remove()"></span>
+              <p style="margin: 0; font-size: 14.5px; line-height: 1.55;">"Got the data needed in 10 secs, @Pipinvestbot digging onchain like a knife going thro butter. Leagues ahead of any other data bots used in discords, lmfao!"</p>
+            </div>
+            <div class="mono" style="font-size: 12.5px; color: var(--green);">@otaku_1996sol</div>
+          </a>
+
+        </div>
+      </div>
+
     </div>
   </section>
 
